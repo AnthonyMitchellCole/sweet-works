@@ -20,8 +20,8 @@ FPS: int = 0
 TICK_HZ: int = 20
 TICK_DT: float = 1.0 / TICK_HZ
 
-TILE: int = 48
-ITEM_PX: int = 16
+TILE: int = 64
+ITEM_PX: int = 24
 
 DEFAULT_ZOOM: float = 1.0
 MIN_ZOOM: float = 0.75

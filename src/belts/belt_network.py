@@ -35,10 +35,16 @@ class BeltNetwork:
                 advance(nxt_belt)
 
             # Try to push the output slot outside this belt.
+            # On a belt-to-belt push, ConveyorBelt.accept() sets the item's
+            # prev_slot = -1 and slot = 0 on the new belt, which interpolates
+            # smoothly from the end of this belt into the start of the next.
+            # We intentionally do NOT touch slot/prev_slot here: if we did, the
+            # item would race across the destination belt this tick and then
+            # teleport back on the next tick when the snapshot pass resets
+            # prev_slot to the item's actual position.
             out = b.slots[-1]
             if out is not None:
                 if self._try_push(b, out, world):
-                    out.slot = float(b.SLOTS)  # visually exit off the end
                     b.slots[-1] = None
 
             # Slide remaining items forward within this belt.

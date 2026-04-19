@@ -91,7 +91,7 @@ class AssetLoader:
         cached = self._sprites.get(key)
         if cached is not None:
             return cached
-        path = paths.SPRITES_DIR / f"{key}.png"
+        path = paths.sprites_dir() / f"{key}.png"
         if not path.exists():
             generator.generate_all(force=False)
         if not path.exists():
