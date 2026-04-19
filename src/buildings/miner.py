@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..belts.belt import ConveyorBelt
-from ..core import config
-from ..items.item import Item
 from ..items.item_type import ItemType
 from ..world.direction import Direction
 from ..world.tile import Coord
@@ -36,21 +33,21 @@ class Miner(Building):
     def _configure_ports(self) -> None:
         self._add_port(PortKind.OUTPUT, side=self.rotation, cell_offset=(0, 0))
 
-    def tick(self, world: "World") -> None:
+    def tick(self, world: World) -> None:
         self._timer += 1
         if self._timer < self.period_ticks:
             return
         out = self.outputs[0]
-        item = Item(type=self.item)
+        tid = self.item.type_id
 
         dx, dy = out.side.vector
         next_cell = (out.cell[0] + dx, out.cell[1] + dy)
-        target = world.tile_at(next_cell)
         placed = False
-        if isinstance(target, ConveyorBelt):
-            placed = target.accept(item)
+        network = world.belt_network
+        if network is not None:
+            placed = network.accept(next_cell, tid)
         if not placed:
-            placed = out.push(item)
+            placed = out.push_id(tid)
         if placed:
             self._timer = 0
             world.events.emit("item.produced", self.item)

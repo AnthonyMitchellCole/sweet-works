@@ -5,9 +5,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import pygame
+
     from ..assets.loader import AssetLoader
     from .camera import Camera
-    import pygame
 
 
 Coord = tuple[int, int]
@@ -30,9 +31,9 @@ class Tile:
 
     def render(
         self,
-        surface: "pygame.Surface",
-        camera: "Camera",
-        assets: "AssetLoader",
+        surface: pygame.Surface,
+        camera: Camera,
+        assets: AssetLoader,
         time: float,
         sim_alpha: float,
     ) -> None:

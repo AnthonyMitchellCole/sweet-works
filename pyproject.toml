@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fac-py"
+version = "0.2.0"
+description = "A top-down, pixel-art factory game scaffold in Python, built on pygame-ce with a data-oriented 1M-item belt simulation."
+requires-python = ">=3.11"
+dependencies = [
+    "pygame-ce>=2.5.0",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "pytest-benchmark>=4",
+    "ruff>=0.6",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+]
+markers = [
+    "bench: long-running performance gates (deselect with '-m \"not bench\"').",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["assets", ".git"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF"]
+ignore = [
+    "E501",   # line-length handled by formatter
+    "B008",   # function calls in defaults are common for dataclasses
+    "B905",   # zip(strict=) is pedantic; call sites here are always equal-length
+    "RUF005", # iterable concatenation is clearer than (x, *seq) in some places
+    "RUF009", # palette uses frozen dataclass defaults constructed from hex
+    "RUF046", # numpy scalars need explicit int() casts to satisfy static tooling
+    "SIM103", # explicit if/return reads better in UI hit-testing
+    "SIM105", # try/except/pass is clearer than contextlib.suppress here
+    "SIM108", # readable if/else blocks > one-liner ternaries for render paths
+    "UP042",  # str+Enum mixin still preferred for Python 3.11 compat
+]

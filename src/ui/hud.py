@@ -14,13 +14,14 @@ from ..items.item_type import ItemType
 from ..items.registry import ITEMS
 from ..rendering.animation import AnimValue
 from ..rendering.pixel import beveled_panel
+from ..rendering.pool import acquired
 
 if TYPE_CHECKING:
     from ..assets.loader import AssetLoader
 
 
 class HUD:
-    def __init__(self, assets: "AssetLoader", events: EventBus) -> None:
+    def __init__(self, assets: AssetLoader, events: EventBus) -> None:
         self.assets = assets
         self.events = events
 
@@ -98,10 +99,11 @@ class HUD:
         surface.blit(count_surf, (tx, ty))
 
         if pulse > 0.02:
-            halo = pygame.Surface(
-                (icon.get_width() + 6, icon.get_height() + 6), pygame.SRCALPHA
-            )
-            halo.fill(with_alpha(item_type.color, int(pulse * 140)))
-            surface.blit(halo, (x - 3, icon_y - 3), special_flags=pygame.BLEND_PREMULTIPLIED)
+            halo_size = (icon.get_width() + 6, icon.get_height() + 6)
+            with acquired(halo_size) as halo:
+                halo.fill(with_alpha(item_type.color, int(pulse * 140)))
+                surface.blit(
+                    halo, (x - 3, icon_y - 3), special_flags=pygame.BLEND_PREMULTIPLIED
+                )
 
         return tx + count_surf.get_width() + THEME.spacing.lg

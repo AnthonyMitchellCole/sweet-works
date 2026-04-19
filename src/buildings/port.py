@@ -1,13 +1,19 @@
-"""Input / output port on a building cell."""
+"""Input / output port on a building cell.
+
+The internal buffer stores ``int16`` type-ids (0 = empty) in a pre-allocated
+numpy ring buffer. This keeps port ops allocation-free and lets
+``count_of`` collapse to a vectorised ``np.count_nonzero`` for the
+hottest path (``Assembler._can_start_craft``).
+"""
 
 from __future__ import annotations
 
-from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 
-from ..items.item import Item
-from ..items.item_type import ItemType
+import numpy as np
+
+from ..items.item_type import EMPTY_ID, ItemType
 from ..world.direction import Direction
 from ..world.tile import Coord
 
@@ -20,62 +26,132 @@ class PortKind(Enum):
 @dataclass
 class Port:
     kind: PortKind
-    side: Direction            # outward-facing side of the building
-    cell: Coord                # absolute world-cell this port lives on
+    side: Direction                    # outward-facing side of the building
+    cell: Coord                        # absolute world-cell this port lives on
     filter: ItemType | None = None
     capacity: int = 8
-    buffer: deque[Item] = field(default_factory=deque)
+    _buf: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int16))
+    _head: int = 0
+    _tail: int = 0
+    _count: int = 0
 
-    # -- input ports -------------------------------------------------------
+    def __post_init__(self) -> None:
+        if self._buf.size != self.capacity:
+            self._buf = np.zeros(self.capacity, dtype=np.int16)
+            self._head = 0
+            self._tail = 0
+            self._count = 0
 
-    def can_accept(self, item: Item) -> bool:
+    # ---- introspection ----------------------------------------------------
+
+    def __len__(self) -> int:
+        return self._count
+
+    @property
+    def count(self) -> int:
+        return self._count
+
+    def is_empty(self) -> bool:
+        return self._count == 0
+
+    def is_full(self) -> bool:
+        return self._count >= self.capacity
+
+    @property
+    def buffer(self) -> np.ndarray:
+        """View of current buffer contents (in insertion order)."""
+        if self._count == 0:
+            return np.zeros(0, dtype=np.int16)
+        if self._head < self._tail:
+            return self._buf[self._head : self._tail].copy()
+        out = np.empty(self._count, dtype=np.int16)
+        first = self._buf.size - self._head
+        out[:first] = self._buf[self._head :]
+        out[first:] = self._buf[: self._tail]
+        return out
+
+    # ---- accept (input ports) --------------------------------------------
+
+    def accept_id(self, tid: int) -> bool:
         if self.kind is not PortKind.INPUT:
             return False
-        if self.filter is not None and item.type is not self.filter:
+        if tid == EMPTY_ID:
             return False
-        return len(self.buffer) < self.capacity
-
-    def accept(self, item: Item) -> bool:
-        if not self.can_accept(item):
+        if self.filter is not None and tid != self.filter.type_id:
             return False
-        self.buffer.append(item)
+        if self._count >= self.capacity:
+            return False
+        self._buf[self._tail] = tid
+        self._tail = (self._tail + 1) % self.capacity
+        self._count += 1
         return True
 
-    # -- output ports ------------------------------------------------------
+    # ---- peek/pop (both) --------------------------------------------------
 
     def has_item(self) -> bool:
-        return bool(self.buffer)
+        return self._count > 0
 
-    def peek(self) -> Item | None:
-        return self.buffer[0] if self.buffer else None
+    def peek_id(self) -> int:
+        if self._count == 0:
+            return EMPTY_ID
+        return int(self._buf[self._head])
 
-    def pop(self) -> Item | None:
-        return self.buffer.popleft() if self.buffer else None
+    def pop_id(self) -> int:
+        if self._count == 0:
+            return EMPTY_ID
+        tid = int(self._buf[self._head])
+        self._buf[self._head] = EMPTY_ID
+        self._head = (self._head + 1) % self.capacity
+        self._count -= 1
+        return tid
 
-    def push(self, item: Item) -> bool:
+    # ---- push (output ports) ---------------------------------------------
+
+    def push_id(self, tid: int) -> bool:
         if self.kind is not PortKind.OUTPUT:
             return False
-        if len(self.buffer) >= self.capacity:
+        if tid == EMPTY_ID:
             return False
-        self.buffer.append(item)
+        if self._count >= self.capacity:
+            return False
+        self._buf[self._tail] = tid
+        self._tail = (self._tail + 1) % self.capacity
+        self._count += 1
         return True
 
-    # -- filter helpers ----------------------------------------------------
+    # ---- filter helpers (hot on assembler.can_start_craft) ---------------
+
+    def count_of_id(self, tid: int) -> int:
+        if self._count == 0:
+            return 0
+        return int(np.count_nonzero(self.buffer == tid))
 
     def count_of(self, item_type: ItemType) -> int:
-        return sum(1 for i in self.buffer if i.type is item_type)
+        return self.count_of_id(item_type.type_id)
+
+    def drain_of_id(self, tid: int, n: int) -> int:
+        """Remove up to ``n`` items of ``tid``. Preserves order of others."""
+        if n <= 0 or self._count == 0 or tid == EMPTY_ID:
+            return 0
+        removed = 0
+        snapshot = self.buffer  # copy
+        kept = snapshot.copy()
+        write = 0
+        for v in snapshot:
+            iv = int(v)
+            if iv == tid and removed < n:
+                removed += 1
+                continue
+            kept[write] = iv
+            write += 1
+        # Rewrite circular buffer as a contiguous prefix.
+        self._buf[:] = EMPTY_ID
+        if write > 0:
+            self._buf[:write] = kept[:write]
+        self._head = 0
+        self._tail = write % self.capacity
+        self._count = write
+        return removed
 
     def drain_of(self, item_type: ItemType, n: int) -> int:
-        """Remove up to n items of the given type. Returns amount removed."""
-        removed = 0
-        remaining = deque()
-        while self.buffer and removed < n:
-            it = self.buffer.popleft()
-            if it.type is item_type:
-                removed += 1
-            else:
-                remaining.append(it)
-        # preserve non-matching order
-        for it in remaining:
-            self.buffer.appendleft(it)
-        return removed
+        return self.drain_of_id(item_type.type_id, n)

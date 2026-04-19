@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pygame
 
 from ..core import config
 from ..design.palette import PALETTE, darken, lighten
-from ..items.item import Item
 from ..items.item_type import ItemType
 from ..world.direction import Direction
 from ..world.tile import Coord
@@ -48,11 +47,10 @@ class Assembler(Building):
     ) -> None:
         self.recipe = recipe
         self._craft: _Craft | None = None
-        self._input_ports_by_type: dict[ItemType, Port] = {}
+        self._input_ports_by_type: dict[int, Port] = {}
         super().__init__(origin, rotation)
 
     def _configure_ports(self) -> None:
-        # Input ports on the west side, one per ingredient (stacked vertically).
         for i, (item_type, _) in enumerate(self.recipe.inputs):
             port = self._add_port(
                 PortKind.INPUT,
@@ -61,9 +59,8 @@ class Assembler(Building):
                 filter=item_type,
                 capacity=8,
             )
-            self._input_ports_by_type[item_type] = port
+            self._input_ports_by_type[item_type.type_id] = port
 
-        # Output port on the east side, middle row.
         for item_type, _ in self.recipe.outputs:
             self._add_port(
                 PortKind.OUTPUT,
@@ -75,7 +72,7 @@ class Assembler(Building):
 
     # -- tick --------------------------------------------------------------
 
-    def tick(self, world: "World") -> None:
+    def tick(self, world: World) -> None:
         if self._craft is None:
             if self._can_start_craft():
                 self._begin_craft()
@@ -89,28 +86,29 @@ class Assembler(Building):
 
     def _can_start_craft(self) -> bool:
         for item_type, qty in self.recipe.inputs:
-            port = self._input_ports_by_type.get(item_type)
-            if port is None or port.count_of(item_type) < qty:
+            port = self._input_ports_by_type.get(item_type.type_id)
+            if port is None or port.count_of_id(item_type.type_id) < qty:
                 return False
         for item_type, _ in self.recipe.outputs:
             out = self._output_port_for(item_type)
-            if out is None or len(out.buffer) >= out.capacity:
+            if out is None or out.is_full():
                 return False
         return True
 
     def _begin_craft(self) -> None:
         for item_type, qty in self.recipe.inputs:
-            port = self._input_ports_by_type[item_type]
-            port.drain_of(item_type, qty)
+            port = self._input_ports_by_type[item_type.type_id]
+            port.drain_of_id(item_type.type_id, qty)
         self._craft = _Craft(remaining=self.recipe.ticks, total=self.recipe.ticks)
 
-    def _finish_craft(self, world: "World") -> None:
+    def _finish_craft(self, world: World) -> None:
         for item_type, qty in self.recipe.outputs:
             port = self._output_port_for(item_type)
             if port is None:
                 continue
             for _ in range(qty):
-                port.push(Item(type=item_type))
+                if not port.push_id(item_type.type_id):
+                    break
                 world.events.emit("item.produced", item_type)
         self._craft = None
 
@@ -125,8 +123,8 @@ class Assembler(Building):
     def render(
         self,
         surface: pygame.Surface,
-        camera: "Camera",
-        assets: "AssetLoader",
+        camera: Camera,
+        assets: AssetLoader,
         time: float,
         sim_alpha: float,
     ) -> None:
@@ -134,7 +132,7 @@ class Assembler(Building):
         self._render_progress(surface, camera, sim_alpha)
 
     def _render_progress(
-        self, surface: pygame.Surface, camera: "Camera", sim_alpha: float
+        self, surface: pygame.Surface, camera: Camera, sim_alpha: float
     ) -> None:
         size = int(config.TILE * camera.zoom)
         x, y = camera.world_to_screen(

@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING
 import pygame
 
 from ..assets.loader import AssetLoader
-from ..design.palette import PALETTE
 from . import config
 from .clock import Clock
 from .events import EventBus
 from .input import Input
+from .perf import PERF, timed
 
 if TYPE_CHECKING:
     from ..scenes.scene import Scene
@@ -31,6 +31,7 @@ class Game:
         self.clock = Clock()
         self.input = Input()
         self.events = EventBus()
+        self.perf = PERF
 
         self._scenes: list[Scene] = []
         self._running: bool = False
@@ -38,10 +39,10 @@ class Game:
     # -- scene stack -------------------------------------------------------
 
     @property
-    def scene(self) -> "Scene | None":
+    def scene(self) -> Scene | None:
         return self._scenes[-1] if self._scenes else None
 
-    def push_scene(self, scene: "Scene") -> None:
+    def push_scene(self, scene: Scene) -> None:
         if self.scene is not None:
             self.scene.pause()
         self._scenes.append(scene)
@@ -55,7 +56,7 @@ class Game:
         if self.scene is not None:
             self.scene.resume()
 
-    def replace_scene(self, scene: "Scene") -> None:
+    def replace_scene(self, scene: Scene) -> None:
         while self._scenes:
             top = self._scenes.pop()
             top.exit()
@@ -88,25 +89,29 @@ class Game:
         pygame.quit()
 
     def _step(self) -> None:
-        self.input.begin_frame()
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self._running = False
-                return
-            if event.type == pygame.VIDEORESIZE:
-                self._on_resize(event.w, event.h)
-            self.input.handle(event)
+        with timed(self.perf.frame):
+            self.input.begin_frame()
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self._running = False
+                    return
+                if event.type == pygame.VIDEORESIZE:
+                    self._on_resize(event.w, event.h)
+                self.input.handle(event)
+                if self.scene is not None:
+                    self.scene.handle_event(event)
+
+            pending_ticks = self.clock.tick()
+
             if self.scene is not None:
-                self.scene.handle_event(event)
+                with timed(self.perf.update):
+                    self.scene.update(
+                        self.clock.dt, pending_ticks, self.clock.sim_alpha
+                    )
 
-        pending_ticks = self.clock.tick()
-
-        if self.scene is not None:
-            self.scene.update(
-                self.clock.dt, pending_ticks, self.clock.sim_alpha
-            )
-
-        self.screen.fill(PALETTE.bg_deep)
-        if self.scene is not None:
-            self.scene.render(self.screen)
-        pygame.display.flip()
+            # Scenes own their own background fill (many render a gradient or
+            # layered world, so a blanket screen.fill here would be wasted work).
+            if self.scene is not None:
+                with timed(self.perf.render):
+                    self.scene.render(self.screen)
+            pygame.display.flip()

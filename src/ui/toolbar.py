@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 import pygame
 
@@ -14,6 +15,7 @@ from ..design.theme import THEME
 from ..design.typography import TYPE
 from ..rendering.animation import Tween
 from ..rendering.pixel import beveled_panel
+from ..rendering.pool import acquired
 from .widget import Widget
 
 if TYPE_CHECKING:
@@ -46,7 +48,7 @@ def default_slots() -> tuple[ToolSlot, ...]:
 class Toolbar:
     def __init__(
         self,
-        assets: "AssetLoader",
+        assets: AssetLoader,
         slots: tuple[ToolSlot, ...] | None = None,
         on_select: Callable[[ToolSlot], None] | None = None,
         window_size: tuple[int, int] = (config.WINDOW_W, config.WINDOW_H),
@@ -182,9 +184,9 @@ class Toolbar:
         beveled_panel(surface, rect, fill=bg, border=PALETTE.line)
 
         if widget.selected:
-            glow = pygame.Surface(rect.size, pygame.SRCALPHA)
-            glow.fill(with_alpha(PALETTE.primary, int(40 + 40 * hover)))
-            surface.blit(glow, rect.topleft)
+            with acquired(rect.size) as glow:
+                glow.fill(with_alpha(PALETTE.primary, int(40 + 40 * hover)))
+                surface.blit(glow, rect.topleft)
             pygame.draw.rect(surface, PALETTE.primary, rect, 2)
         elif hover > 0.02:
             pygame.draw.rect(surface, lighten(PALETTE.line, 0.2), rect, 1)

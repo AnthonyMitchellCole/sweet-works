@@ -16,14 +16,14 @@ class Direction(Enum):
         return _VECTORS[self]
 
     @property
-    def opposite(self) -> "Direction":
+    def opposite(self) -> Direction:
         return _OPPOSITE[self]
 
-    def rotate_cw(self, times: int = 1) -> "Direction":
+    def rotate_cw(self, times: int = 1) -> Direction:
         order = (Direction.N, Direction.E, Direction.S, Direction.W)
         return order[(order.index(self) + times) % 4]
 
-    def rotate_ccw(self, times: int = 1) -> "Direction":
+    def rotate_ccw(self, times: int = 1) -> Direction:
         return self.rotate_cw(-times)
 
     @property

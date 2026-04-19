@@ -9,6 +9,7 @@ import pygame
 
 from ..core import config
 from ..design.palette import PALETTE, with_alpha
+from ..rendering.pool import acquired
 from ..world.direction import Direction
 from .toolbar import ToolSlot
 
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 
 
 class PlacementCursor:
-    def __init__(self, assets: "AssetLoader") -> None:
+    def __init__(self, assets: AssetLoader) -> None:
         self.assets = assets
         self.tile_pos: tuple[int, int] = (0, 0)
         self.rotation: Direction = Direction.E
@@ -44,7 +45,7 @@ class PlacementCursor:
 
     # -- render ------------------------------------------------------------
 
-    def render(self, surface: pygame.Surface, camera: "Camera") -> None:
+    def render(self, surface: pygame.Surface, camera: Camera) -> None:
         if self.tool is None:
             return
 
@@ -58,9 +59,9 @@ class PlacementCursor:
         # Pulsing fill
         pulse = 0.5 + 0.5 * math.sin(self._time * 4.0)
         fill_alpha = int(40 + 40 * pulse)
-        overlay = pygame.Surface(rect.size, pygame.SRCALPHA)
-        overlay.fill(with_alpha(PALETTE.secondary, fill_alpha))
-        surface.blit(overlay, rect.topleft)
+        with acquired(rect.size) as overlay:
+            overlay.fill(with_alpha(PALETTE.secondary, fill_alpha))
+            surface.blit(overlay, rect.topleft)
 
         # Crisp outline + pulsing inner outline
         pygame.draw.rect(surface, PALETTE.secondary, rect, 2)

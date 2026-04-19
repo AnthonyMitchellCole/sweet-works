@@ -1,15 +1,26 @@
 # fac-py
 
-A top-down, pixel-art factory game scaffold in Python, built on `pygame-ce`.
+A top-down, pixel-art factory game scaffold in Python, built on `pygame-ce`,
+engineered for **1,000,000 items on belts at 20 Hz** on a developer laptop.
 
 It ships with:
 
 - A centralized **design system** (palette, typography scale, theme tokens).
-- A centralized **asset loader** with procedural sprite generation (no art required).
-- A working **item system**, **conveyor belt system**, and **building system** with
-  typed input/output ports, recipes, and smooth animations.
-- A fixed-timestep simulation (20 Hz) decoupled from a 60 FPS render with
-  interpolation for buttery-smooth belts and items.
+- A centralized **asset loader** with procedural sprite generation, a
+  **zoom-quantized scaled-sprite cache**, and an LRU text cache.
+- A working **item system**, **conveyor belt system**, and **building system**
+  with typed input/output ports, recipes, and smooth animations.
+- A **data-oriented belt simulator** (`BeltChainsSoA`): chains of belts are
+  packed into contiguous `int16` NumPy arrays, and one tick is three
+  vectorised ops across all chains.
+- **Chunked rendering** with dirty-chunk baking, frustum culling and batched
+  `surface.blits` so even at 1M items the renderer stays under the 16.7 ms
+  budget on a single thread.
+- A **fixed-timestep simulation** (20 Hz) decoupled from a 60 FPS render
+  with `prev_slots` / `prev_offset` interpolation for buttery-smooth
+  belts and items.
+- A built-in **benchmark scene**, a **headless CLI bench**, and a
+  **pytest-benchmark** perf-gate suite wired to CI.
 
 ## Run
 
@@ -31,42 +42,129 @@ If you prefer to pre-populate fonts, drop these `.ttf` files into `assets/fonts/
 
 ## Controls
 
-| Key / Action   | Effect                                     |
-| -------------- | ------------------------------------------ |
-| WASD / Arrows  | Pan camera                                 |
-| Scroll wheel   | Zoom                                       |
-| 1 - 5          | Select prefab (belt, miners, assembler)    |
-| R              | Rotate placement                           |
-| Left click     | Place                                      |
-| Right click    | Delete                                     |
-| Esc            | Back / quit                                |
-| Enter (menu)   | Start                                      |
+| Key / Action   | Effect                                          |
+| -------------- | ----------------------------------------------- |
+| WASD / Arrows  | Pan camera                                      |
+| Scroll wheel   | Zoom                                            |
+| 1 - 5          | Select prefab (belt, miners, assemblers)        |
+| R              | Rotate placement                                |
+| Left click     | Place                                           |
+| Right click    | Delete                                          |
+| **F3**         | Toggle live performance HUD                     |
+| Esc            | Back / quit                                     |
+| Enter (menu)   | Play                                            |
+| **B (menu)**   | Launch the 1M-item benchmark scene              |
+
+## Benchmarking
+
+Three complementary harnesses share the same perf budgets in
+`src/core/config.py`:
+
+### 1. In-game benchmark scene
+
+Press **B** on the title screen (or call `replace_scene(BenchmarkScene())`).
+You get a cinematic flyover over a ~1M-item layout, a short warmup, a
+15-second measurement window, and a PASS/FAIL banner keyed off the gates.
+
+### 2. Headless CLI (`make bench`)
+
+```bash
+python -m bench                          # 1M items, 600 ticks
+python -m bench --items 500000 --ticks 400
+python -m bench --json                   # machine-readable output
+python -m bench --render                 # also time a headless render pass
+```
+
+The CLI uses `SDL_VIDEODRIVER=dummy` and exits **non-zero** the instant any
+gate is violated, so it plugs straight into CI.
+
+### 3. pytest-benchmark gates (`make perf`)
+
+```bash
+pytest -m bench tests/benchmarks
+```
+
+- `test_chain_build_under_gate` — 1M-item SoA construction
+- `test_belt_tick_p95_under_gate` — 1M-item `SoA.tick` p95 + max
+- `test_render_frame_p95_under_gate` — headless render pass p95
+
+### Perf gates (defaults)
+
+| Metric              | Gate (ms) | Where                       |
+| ------------------- | --------- | --------------------------- |
+| `belt_tick_p95`     | 20.0      | `GATE_BELT_TICK_P95_MS`     |
+| `belt_tick_max`     | 40.0      | `GATE_BELT_TICK_MAX_MS`     |
+| `render_frame_p95`  | 16.7      | `GATE_RENDER_FRAME_P95_MS`  |
+| `chain_build`       | 500.0     | `GATE_CHAIN_BUILD_MS`       |
+
+## Testing
+
+```bash
+make test          # default unit tests (golden traces, topology)
+make perf          # perf-gate benchmarks (slower; bench-marked tests only)
+make lint          # ruff
+```
+
+Or directly:
+
+```bash
+pytest                    # unit run (bench-marked tests auto-deselected)
+pytest -m bench           # only the perf gates
+```
 
 ## Folder map
 
 ```text
 fac-py/
   main.py
+  bench/                  headless CLI benchmark
   assets/
-    fonts/                  Google Fonts TTFs
-    sprites/                procedurally generated PNGs (cache)
+    fonts/                Google Fonts TTFs
+    sprites/              procedurally generated PNGs (cache)
   src/
-    core/         game loop, config, clock, input, event bus
+    core/         game loop, config, clock, input, event bus, perf counters
     design/       palette, typography, theme, easing
     assets/       asset loader + procedural sprite generator
-    world/        grid, tile, camera, direction, world
-    items/        item types + registry + runtime items
-    belts/        conveyor belt, belt network, renderer
-    buildings/    port, building base, miner, assembler, registry
-    rendering/    layers, renderer, tween/animation, pixel helpers
-    ui/           widget, HUD, toolbar, placement cursor
-    scenes/       scene base, menu, play
+    world/        grid (dirty chunks), tile, camera, direction, world
+    items/        item types + registry + int16 SoA item ids + pool
+    belts/        ConveyorBelt tile, BeltChainsSoA, topology builder
+    buildings/    Port (ring buffer), building base, miner, assembler, registry
+    rendering/    chunk renderer, scaled-sprite cache, cull, surface pool,
+                  layers, renderer, tween/animation, pixel helpers
+    ui/           widget, HUD, toolbar, placement cursor, perf HUD
+    scenes/       scene base, menu, play, benchmark
+  tests/
+    conftest.py
+    test_belt_sim.py          golden traces for SoA tick
+    test_topology.py          chain merge / successor / port tests
+    benchmarks/
+      test_perf_gates.py      pytest-benchmark perf gates
 ```
+
+## Architecture notes
+
+- **Struct-of-arrays belt sim.** A belt chain is a maximal linear run of
+  belts. All chains share four NumPy arrays (`slots`, `chain_offset`,
+  `boundary_mask`, topology). One tick =
+  `(propagation) → (tail exits) → (render snapshot)`, each a single
+  vectorised write across every slot.
+- **Sim/render decoupling.** `clock.dt` drives the render loop; the
+  simulator always steps at fixed 20 Hz. Items are drawn at
+  `slots` + `sim_alpha * prev_offset`, so the 60 FPS render sees smooth
+  motion even though the sim only moves items at 20 discrete steps per
+  second.
+- **Allocation discipline.** Hot paths allocate nothing: `Port` is a
+  NumPy ring buffer, `ItemType` ids are `int16`, the event bus defers
+  handler removals, and UI overlays reuse surfaces from `SurfacePool`.
+- **Rendering budget.** Floor + belt backgrounds are baked per
+  `CHUNK_SIZE` (16x16) chunk per zoom bin. Only dirty chunks re-bake.
+  Animated belts and items are culled per-chain and drawn via
+  `surface.blits` in a single call per chain.
 
 ## Fonts / licensing
 
 - **Press Start 2P** by CodeMan38 — Apache License 2.0
 - **Pixelify Sans** by Stefie Justprince — SIL Open Font License 1.1
 
-Both are permissive. Attribution is included in `assets/fonts/LICENSE.txt` once
-the loader fetches them.
+Both are permissive. Attribution is included in `assets/fonts/LICENSE.txt`
+once the loader fetches them.

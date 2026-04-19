@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from ..items.registry import ITEMS
 from ..world.direction import Direction
@@ -11,7 +11,6 @@ from ..world.tile import Coord
 from .assembler import Assembler, Recipe
 from .building import Building
 from .miner import Miner
-
 
 BuildingFactory = Callable[[Coord, Direction], Building]
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-
 Color = tuple[int, int, int]
 ColorA = tuple[int, int, int, int]
 

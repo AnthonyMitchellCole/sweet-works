@@ -12,11 +12,11 @@ if TYPE_CHECKING:
 
 class Scene:
     def __init__(self) -> None:
-        self.game: "Game | None" = None
+        self.game: Game | None = None
 
     # -- lifecycle ---------------------------------------------------------
 
-    def enter(self, game: "Game") -> None:
+    def enter(self, game: Game) -> None:
         self.game = game
         self.on_enter()
 

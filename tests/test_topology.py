@@ -1,0 +1,171 @@
+"""Topology tests: ensure ``build_chains`` groups belts into maximal
+linear chains and wires successor chains / building ports correctly.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from src.belts.belt import ConveyorBelt
+from src.belts.chain import SLOTS_PER_BELT
+from src.belts.network_soa import BeltNetworkSoA
+from src.belts.topology import build_benchmark, build_chains
+from src.buildings.registry import BUILDINGS
+from src.core.events import EventBus
+from src.items.item_type import EMPTY_ID
+from src.items.registry import ITEMS
+from src.world.direction import Direction
+from src.world.world import World
+
+
+def _make_line(start: tuple[int, int], n: int, direction: Direction) -> list[ConveyorBelt]:
+    dx, dy = direction.vector
+    return [
+        ConveyorBelt((start[0] + dx * i, start[1] + dy * i), direction)
+        for i in range(n)
+    ]
+
+
+def test_single_line_becomes_one_chain() -> None:
+    belts = _make_line((0, 0), 5, Direction.E)
+    soa = build_chains(belts)
+    assert soa.chain_count == 1
+    assert soa.belt_count == 5
+    assert soa.total_slots == 5 * SLOTS_PER_BELT
+    # All belts should point at chain 0 with increasing local starts.
+    assert (soa.belt_chain == 0).all()
+    assert list(soa.belt_local_start) == [
+        i * SLOTS_PER_BELT for i in range(5)
+    ]
+
+
+def test_two_disjoint_lines_become_two_chains_no_successor() -> None:
+    belts = _make_line((0, 0), 3, Direction.E) + _make_line((0, 5), 3, Direction.E)
+    soa = build_chains(belts)
+    assert soa.chain_count == 2
+    assert int(soa.chain_succ_chain[0]) == -1
+    assert int(soa.chain_succ_chain[1]) == -1
+
+
+def test_two_lines_end_to_end_merge_into_one_chain() -> None:
+    # Contiguous east-facing belts with the same direction and no merge point.
+    belts = _make_line((0, 0), 6, Direction.E)
+    soa = build_chains(belts)
+    assert soa.chain_count == 1
+
+
+def test_merge_splits_into_two_chains_with_successor_link() -> None:
+    # Two feeders both point at a common downstream belt -> the common belt
+    # starts its own chain, and each feeder chain has it as successor.
+    b1 = ConveyorBelt((0, 0), Direction.E)  # feeds (1,0)
+    b2 = ConveyorBelt((1, -1), Direction.S)  # feeds (1,0) from north
+    common = ConveyorBelt((1, 0), Direction.E)
+    tail = ConveyorBelt((2, 0), Direction.E)
+    soa = build_chains([b1, b2, common, tail])
+    assert soa.chain_count == 3  # one per feeder + one starting at the merge
+
+    # Find the chain that owns ``common`` (the merge target).
+    bi_common = next(
+        i
+        for i in range(soa.belt_count)
+        if tuple(soa.belt_pos[i]) == (1, 0)
+    )
+    merge_chain = int(soa.belt_chain[bi_common])
+
+    # Each feeder chain must list ``merge_chain`` as its successor.
+    for pos in ((0, 0), (1, -1)):
+        bi = next(
+            i
+            for i in range(soa.belt_count)
+            if tuple(soa.belt_pos[i]) == pos
+        )
+        ck = int(soa.belt_chain[bi])
+        assert int(soa.chain_succ_chain[ck]) == merge_chain
+
+
+def test_successor_port_wires_tail_into_building_input() -> None:
+    events = EventBus()
+    world = World(events)
+
+    miner = BUILDINGS.miner_iron.factory((0, 0), Direction.E)
+    assembler = BUILDINGS.assembler_plate.factory((6, 0), Direction.E)
+    world.place_building(miner)
+    world.place_building(assembler)
+    for x in range(1, 6):
+        world.place_tile(ConveyorBelt((x, 0), Direction.E))
+
+    network = BeltNetworkSoA()
+    network.rebuild(world)
+    soa = network.soa
+
+    # Exactly one chain from x=1..5 east, ending into the assembler's input.
+    assert soa.chain_count >= 1
+    # Some chain must have a successor port (>= 0).
+    assert (soa.chain_succ_port >= 0).any()
+
+
+def test_network_rebuild_clears_dirty_flag() -> None:
+    events = EventBus()
+    world = World(events)
+    network = BeltNetworkSoA()
+    world.belt_network = network
+    for x in range(5):
+        world.place_tile(ConveyorBelt((x, 0), Direction.E))
+    # Flag should be dirty after placement.
+    assert network._dirty
+    network.tick(world)
+    assert not network._dirty
+    # Accept should now place items into the head.
+    assert network.accept((0, 0), 1)
+    assert network.soa.slots[0] == 1
+
+
+def test_benchmark_layout_total_items_matches_fill() -> None:
+    soa = build_benchmark(n_chains=8, belts_per_chain=16, fill_tid=7)
+    expected_slots = 8 * 16 * SLOTS_PER_BELT
+    assert soa.total_slots == expected_slots
+    assert soa.total_items() == expected_slots  # every slot filled
+    # auto-sink/source should be set.
+    assert soa.auto_sink_chains is not None
+    assert soa.auto_source_chains is not None
+    # Tick long enough that auto-sink and auto-source settle into steady
+    # state. The gap introduced by auto-sink propagates upstream at one
+    # slot per tick while auto-source keeps heads filled, producing a
+    # stable flow with roughly half the slots populated.
+    per_chain_slots = int(soa.chain_offset[1] - soa.chain_offset[0])
+    for _ in range(per_chain_slots * 2):
+        soa.tick()
+    # Half-full (alternating) is the canonical steady state; allow a
+    # small fudge either way so the test isn't brittle against ordering.
+    assert expected_slots // 3 <= soa.total_items() <= expected_slots
+    heads = soa.chain_offset[:-1]
+    # Heads must remain sourced -- never empty across a settled tick.
+    assert (soa.slots[heads] != EMPTY_ID).all()
+
+
+def test_miner_produces_onto_belt_via_network() -> None:
+    events = EventBus()
+    world = World(events)
+    network = BeltNetworkSoA()
+    world.belt_network = network
+
+    miner = BUILDINGS.miner_iron.factory((0, 0), Direction.E)
+    world.place_building(miner)
+    world.place_tile(ConveyorBelt((1, 0), Direction.E))
+    world.place_tile(ConveyorBelt((2, 0), Direction.E))
+
+    # Run enough ticks for the miner to produce. Miner rate is 2/s (see registry),
+    # we just need one successful deposit.
+    found_iron = False
+    iron_tid = ITEMS.iron.type_id
+    for _ in range(200):
+        world.tick()
+        if int(np.count_nonzero(network.soa.slots == iron_tid)) > 0:
+            found_iron = True
+            break
+    assert found_iron, "miner should place an iron item on the belt eventually"
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

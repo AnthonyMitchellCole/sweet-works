@@ -2,20 +2,24 @@
 
 Handles:
 - Downloading Google Fonts on first run (or failing clearly).
-- Resolving `TextStyle` objects to cached `pygame.Font` instances.
-- Loading cached sprites produced by `generator.py`.
-- Rendering text surfaces with a small memoization cache.
+- Resolving ``TextStyle`` objects to cached ``pygame.Font`` instances.
+- Loading cached sprites produced by ``generator.py``.
+- Rendering text surfaces with an LRU-capped memoization cache.
+- Handing out zoom-scaled sprites via :class:`ScaledSpriteCache`.
 """
 
 from __future__ import annotations
 
 import urllib.request
+from collections import OrderedDict
 from pathlib import Path
 
 import pygame
 
+from ..core import config
 from ..design.palette import Color
 from ..design.typography import ALL_STYLES, TextStyle
+from ..rendering.sprite_cache import ScaledSpriteCache
 from . import generator, paths
 
 
@@ -23,7 +27,8 @@ class AssetLoader:
     def __init__(self) -> None:
         self._fonts: dict[tuple[str, int, int], pygame.font.Font] = {}
         self._sprites: dict[str, pygame.Surface] = {}
-        self._text_cache: dict[tuple[str, str, Color], pygame.Surface] = {}
+        self._text_cache: "OrderedDict[tuple[str, str, Color], pygame.Surface]" = OrderedDict()
+        self._scaled = ScaledSpriteCache()
         self._ready: bool = False
 
     # -- bootstrap ---------------------------------------------------------
@@ -80,9 +85,13 @@ class AssetLoader:
         key = (style.name, text, color)
         cached = self._text_cache.get(key)
         if cached is not None:
+            self._text_cache.move_to_end(key)
             return cached
         surf = self.font(style).render(text, False, color)
         self._text_cache[key] = surf
+        # LRU evict; prevents unbounded growth from churning number strings.
+        while len(self._text_cache) > config.TEXT_CACHE_MAX:
+            self._text_cache.popitem(last=False)
         return surf
 
     # -- sprites -----------------------------------------------------------
@@ -100,8 +109,21 @@ class AssetLoader:
         self._sprites[key] = surf
         return surf
 
+    def sprite_scaled(self, key: str, zoom: float) -> pygame.Surface:
+        """Return the sprite pre-scaled for the given camera zoom."""
+        base = self.sprite(key)
+        return self._scaled.get(key, base, zoom)
+
     def belt(self, direction: str, frame: int) -> pygame.Surface:
         return self.sprite(f"belt_{direction}_f{frame}")
 
+    def belt_scaled(self, direction: str, frame: int, zoom: float) -> pygame.Surface:
+        key = f"belt_{direction}_f{frame}"
+        return self._scaled.get(key, self.sprite(key), zoom)
+
     def item_icon(self, item_id: str) -> pygame.Surface:
         return self.sprite(f"item_{item_id}")
+
+    def item_icon_scaled(self, item_id: str, zoom: float) -> pygame.Surface:
+        key = f"item_{item_id}"
+        return self._scaled.get(key, self.sprite(key), zoom)

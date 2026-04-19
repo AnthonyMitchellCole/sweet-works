@@ -5,21 +5,21 @@ from __future__ import annotations
 import pygame
 
 from ..belts.belt import ConveyorBelt
-from ..belts.belt_network import BeltNetwork
+from ..belts.network_soa import BeltNetworkSoA
 from ..buildings.registry import BUILDINGS, BuildingPrefab
 from ..core import config
+from ..core.perf import PERF, timed
 from ..design.palette import PALETTE
 from ..design.typography import TYPE
-from ..items.registry import ITEMS
 from ..rendering.renderer import Renderer
 from ..ui.cursor import PlacementCursor
 from ..ui.hud import HUD
+from ..ui.perf_hud import PerfHUD
 from ..ui.toolbar import Toolbar, ToolSlot
 from ..world.camera import Camera
 from ..world.direction import Direction
 from ..world.world import World
 from .scene import Scene
-
 
 PAN_KEYS = {
     pygame.K_w: (0, -1),
@@ -40,6 +40,7 @@ class PlayScene(Scene):
         self.camera: Camera | None = None
         self.renderer: Renderer | None = None
         self.hud: HUD | None = None
+        self.perf_hud: PerfHUD | None = None
         self.toolbar: Toolbar | None = None
         self.cursor: PlacementCursor | None = None
 
@@ -49,10 +50,11 @@ class PlayScene(Scene):
         assert self.game is not None
         window_size = self.game.window_size
         self.world = World(self.game.events)
-        self.world.belt_network = BeltNetwork()
+        self.world.belt_network = BeltNetworkSoA()
         self.camera = Camera(window_size)
         self.renderer = Renderer(self.game.assets)
         self.hud = HUD(self.game.assets, self.game.events)
+        self.perf_hud = PerfHUD(self.game.assets)
         self.toolbar = Toolbar(
             self.game.assets,
             on_select=self._on_tool_select,
@@ -64,6 +66,10 @@ class PlayScene(Scene):
         self.camera.set_center(6 * config.TILE, 4 * config.TILE)
 
         self._build_demo_factory()
+        # Fold demo placements into the SoA before the first tick.
+        self.world.belt_network.rebuild(self.world)
+
+        PERF.reset()
 
     def on_exit(self) -> None:
         if self.hud is not None:
@@ -81,9 +87,13 @@ class PlayScene(Scene):
         assert self.game is not None
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
-                self.game.quit()
+                from .menu_scene import MenuScene
+
+                self.game.replace_scene(MenuScene())
             elif event.key == pygame.K_r and self.cursor is not None:
                 self.cursor.rotate_cw()
+            elif event.key == pygame.K_F3 and self.perf_hud is not None:
+                self.perf_hud.toggle()
             elif self.toolbar is not None and self.toolbar.handle_hotkey(event.key):
                 pass
         elif event.type == pygame.MOUSEWHEEL and self.camera is not None:
@@ -124,7 +134,8 @@ class PlayScene(Scene):
                 self.world.remove_at(tile_pos)
 
         for _ in range(sim_ticks):
-            self.world.tick()
+            with timed(PERF.tick):
+                self.world.tick()
 
         self.world.advance_time(dt)
         self.hud.update(dt)
@@ -138,6 +149,7 @@ class PlayScene(Scene):
         assert self.toolbar is not None
         assert self.cursor is not None
         assert self.hud is not None
+        assert self.perf_hud is not None
         assert self.game is not None
 
         surface.fill(PALETTE.bg_deep)
@@ -147,6 +159,8 @@ class PlayScene(Scene):
         self.cursor.render(surface, self.camera)
         self.hud.render(surface, self.game.clock.fps)
         self.toolbar.render(surface)
+        snap = PERF.snapshot(fps=self.game.clock.fps)
+        self.perf_hud.render(surface, snap)
         self._render_hint(surface)
 
     # -- helpers -----------------------------------------------------------
@@ -173,7 +187,7 @@ class PlayScene(Scene):
     def _point_over_ui(self, pos: tuple[int, int]) -> bool:
         if self.toolbar is None:
             return False
-        for w in self.toolbar._widgets:  # noqa: SLF001 - scene owns toolbar
+        for w in self.toolbar._widgets:
             if w.rect.collidepoint(pos):
                 return True
         # HUD top bar (padding + 48 h)
@@ -201,7 +215,7 @@ class PlayScene(Scene):
     def _render_hint(self, surface: pygame.Surface) -> None:
         assert self.game is not None
         hint = self.game.assets.render_text(
-            "WASD pan  -  scroll zoom  -  1-5 tool  -  R rotate  -  LMB place  -  RMB delete",
+            "WASD pan  -  scroll zoom  -  1-5 tool  -  R rotate  -  F3 perf  -  LMB place  -  RMB delete  -  ESC menu",
             TYPE.caption,
             PALETTE.muted,
         )

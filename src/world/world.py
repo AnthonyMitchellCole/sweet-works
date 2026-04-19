@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Iterator
+from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
+from ..belts.belt import ConveyorBelt
 from ..core.events import EventBus
 from .grid import Grid
 from .tile import Coord, Tile
 
 if TYPE_CHECKING:
-    from ..belts.belt_network import BeltNetwork
+    from ..belts.network_soa import BeltNetworkSoA
     from ..buildings.building import Building
 
 
@@ -17,10 +19,9 @@ class World:
     def __init__(self, events: EventBus) -> None:
         self.events = events
         self.grid: Grid = Grid()
-        self.buildings: list["Building"] = []
-        self._building_cells: dict[Coord, "Building"] = {}
-        # Network is attached after construction (avoids import cycle).
-        self.belt_network: "BeltNetwork | None" = None
+        self.buildings: list[Building] = []
+        self._building_cells: dict[Coord, Building] = {}
+        self.belt_network: BeltNetworkSoA | None = None
         self.time: float = 0.0
 
     # -- queries -----------------------------------------------------------
@@ -28,13 +29,13 @@ class World:
     def is_free(self, pos: Coord) -> bool:
         return pos not in self.grid and pos not in self._building_cells
 
-    def building_at(self, pos: Coord) -> "Building | None":
+    def building_at(self, pos: Coord) -> Building | None:
         return self._building_cells.get(pos)
 
     def tile_at(self, pos: Coord) -> Tile | None:
         return self.grid.get(pos)
 
-    def building_cells(self, building: "Building") -> Iterator[Coord]:
+    def building_cells(self, building: Building) -> Iterator[Coord]:
         ox, oy = building.origin
         w, h = building.footprint
         for dy in range(h):
@@ -47,26 +48,35 @@ class World:
         if not self.is_free(tile.pos):
             return False
         self.grid.set(tile)
+        if isinstance(tile, ConveyorBelt) and self.belt_network is not None:
+            self.belt_network.on_tile_placed(tile)
         return True
 
     def remove_tile(self, pos: Coord) -> Tile | None:
-        return self.grid.remove(pos)
+        tile = self.grid.remove(pos)
+        if isinstance(tile, ConveyorBelt) and self.belt_network is not None:
+            self.belt_network.on_tile_removed(pos)
+        return tile
 
-    def place_building(self, building: "Building") -> bool:
+    def place_building(self, building: Building) -> bool:
         cells = list(self.building_cells(building))
         if any(not self.is_free(c) for c in cells):
             return False
         self.buildings.append(building)
         for c in cells:
             self._building_cells[c] = building
+        if self.belt_network is not None:
+            self.belt_network.on_building_changed()
         return True
 
-    def remove_building(self, building: "Building") -> None:
+    def remove_building(self, building: Building) -> None:
         if building not in self.buildings:
             return
         self.buildings.remove(building)
         for c in list(self.building_cells(building)):
             self._building_cells.pop(c, None)
+        if self.belt_network is not None:
+            self.belt_network.on_building_changed()
 
     def remove_at(self, pos: Coord) -> bool:
         tile = self.remove_tile(pos)
