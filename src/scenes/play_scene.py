@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pygame
 
 from ..belts.belt import ConveyorBelt
@@ -10,9 +12,10 @@ from ..buildings.building import Building
 from ..buildings.registry import BUILDINGS, BuildingPrefab
 from ..core import config
 from ..core.perf import PERF, timed
-from ..design.palette import PALETTE
+from ..design.palette import PALETTE, with_alpha
 from ..design.typography import TYPE
 from ..rendering.animation import AnimValue
+from ..rendering.pool import acquired
 from ..rendering.renderer import Renderer
 from ..ui import info as info_mod
 from ..ui.cursor import PlacementCursor
@@ -59,6 +62,12 @@ class PlayScene(Scene):
         self._hover_footprint: tuple[int, int] = (1, 1)
         self._hover_strength = AnimValue(value=0.0, target=0.0, speed=14.0)
 
+        # Middle-mouse drag-pan state.
+        self._drag_active: bool = False
+        self._drag_vel: tuple[float, float] = (0.0, 0.0)
+        self._drag_strength = AnimValue(value=0.0, target=0.0, speed=16.0)
+        self._drag_cursor_applied: bool = False
+
     # -- lifecycle ---------------------------------------------------------
 
     def on_enter(self) -> None:
@@ -92,6 +101,7 @@ class PlayScene(Scene):
     def on_exit(self) -> None:
         if self.hud is not None:
             self.hud.close()
+        self._release_drag_cursor()
 
     def on_resize(self, size: tuple[int, int]) -> None:
         if self.camera is not None:
@@ -135,8 +145,10 @@ class PlayScene(Scene):
         assert self.tooltip is not None
         assert self.menu is not None
 
+        self._update_drag_pan(dt)
         self._pan_camera(dt)
         self.camera.update(dt)
+        self._drag_strength.update(dt)
 
         mouse_pos = self.game.input.mouse_pos
         over_ui = self._point_over_ui(mouse_pos)
@@ -186,13 +198,13 @@ class PlayScene(Scene):
             self.game.input.mouse_released(1),
         )
 
-        # LMB dispatch with new Pointer semantics.
-        if not over_ui and self.game.input.mouse_pressed(1):
-            self._on_lmb(tile_pos, is_pointer)
-
-        # RMB: only delete when not in Pointer mode.
-        if not over_ui and self.game.input.mouse_pressed(3) and not is_pointer:
-            self.world.remove_at(tile_pos)
+        # LMB/RMB dispatch is suppressed while middle-mouse panning is active,
+        # so drags never accidentally place or delete.
+        if not over_ui and not self._drag_active:
+            if self.game.input.mouse_pressed(1):
+                self._on_lmb(tile_pos, is_pointer)
+            if self.game.input.mouse_pressed(3) and not is_pointer:
+                self.world.remove_at(tile_pos)
 
         for _ in range(sim_ticks):
             with timed(PERF.tick):
@@ -223,6 +235,7 @@ class PlayScene(Scene):
         self._render_hover_brackets(surface)
 
         self.cursor.render(surface, self.camera)
+        self._render_drag_indicator(surface)
         self.hud.render(surface, self.game.clock.fps)
         self.toolbar.render(surface)
         self.menu.render(surface)
@@ -249,6 +262,95 @@ class PlayScene(Scene):
         nx, ny = dx / mag, dy / mag
         speed = config.CAMERA_PAN_SPEED * dt / max(0.5, self.camera.zoom)
         self.camera.pan(nx * speed, ny * speed)
+
+    def _update_drag_pan(self, dt: float) -> None:
+        """Middle-mouse drag panning with 1:1 tracking and inertia on release."""
+        assert self.game is not None
+        assert self.camera is not None
+        inp = self.game.input
+
+        if inp.mouse_pressed(2):
+            self._drag_active = True
+            self._drag_vel = (0.0, 0.0)
+            self._drag_strength.to(1.0)
+            self._apply_drag_cursor()
+
+        if inp.mouse_released(2) and self._drag_active:
+            self._drag_active = False
+            self._drag_strength.to(0.0)
+            self._release_drag_cursor()
+
+        zoom = max(1e-4, self.camera.zoom)
+
+        if self._drag_active:
+            mx, my = inp.mouse_motion
+            if mx != 0 or my != 0:
+                wx = -mx / zoom
+                wy = -my / zoom
+                self.camera.pan_instant(wx, wy)
+                if dt > 1e-6:
+                    a = config.CAMERA_DRAG_VEL_EMA
+                    new_vx = wx / dt
+                    new_vy = wy / dt
+                    self._drag_vel = (
+                        self._drag_vel[0] * (1.0 - a) + new_vx * a,
+                        self._drag_vel[1] * (1.0 - a) + new_vy * a,
+                    )
+            return
+
+        vx, vy = self._drag_vel
+        speed = (vx * vx + vy * vy) ** 0.5
+        if speed <= config.CAMERA_DRAG_MIN_SPEED:
+            if speed > 0.0:
+                self._drag_vel = (0.0, 0.0)
+            return
+        self.camera.pan_instant(vx * dt, vy * dt)
+        decay = math.exp(-config.CAMERA_DRAG_INERTIA_DECAY * dt)
+        self._drag_vel = (vx * decay, vy * decay)
+
+    def _apply_drag_cursor(self) -> None:
+        if self._drag_cursor_applied:
+            return
+        try:
+            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_SIZEALL)
+            self._drag_cursor_applied = True
+        except (pygame.error, AttributeError, TypeError):
+            pass
+
+    def _release_drag_cursor(self) -> None:
+        if not self._drag_cursor_applied:
+            return
+        try:
+            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
+        except (pygame.error, AttributeError, TypeError):
+            pass
+        self._drag_cursor_applied = False
+
+    def _render_drag_indicator(self, surface: pygame.Surface) -> None:
+        """Soft pulsing ring at the mouse while middle-drag panning."""
+        assert self.game is not None
+        s = self._drag_strength.value
+        if s <= 0.02:
+            return
+        mx, my = self.game.input.mouse_pos
+        t = self.world.time if self.world is not None else 0.0
+        pulse = 0.5 + 0.5 * math.sin(t * 5.5)
+        radius = int(round(14 + 5 * pulse))
+        ring_alpha = int(round(170 * s))
+        glow_alpha = int(round(55 * s * (0.6 + 0.4 * pulse)))
+        d = radius * 2 + 8
+        with acquired((d, d)) as overlay:
+            c = (d // 2, d // 2)
+            pygame.draw.circle(
+                overlay, with_alpha(PALETTE.primary, glow_alpha), c, radius + 3
+            )
+            pygame.draw.circle(
+                overlay, with_alpha(PALETTE.primary, ring_alpha), c, radius, 2
+            )
+            pygame.draw.circle(
+                overlay, with_alpha(PALETTE.text_strong, int(ring_alpha * 0.55)), c, 2
+            )
+            surface.blit(overlay, (mx - d // 2, my - d // 2))
 
     def _on_tool_select(self, slot: ToolSlot) -> None:
         if self.cursor is not None:
@@ -365,7 +467,7 @@ class PlayScene(Scene):
     def _render_hint(self, surface: pygame.Surface) -> None:
         assert self.game is not None
         hint = self.game.assets.render_text(
-            "WASD pan  -  scroll zoom  -  Q inspect  -  1-5 tool  -  R rotate  -  F3 perf  -  LMB place/select  -  RMB delete  -  Alt hover info  -  ESC menu",
+            "WASD / MMB drag pan  -  scroll zoom  -  Q inspect  -  1-5 tool  -  R rotate  -  F3 perf  -  LMB place/select  -  RMB delete  -  Alt hover info  -  ESC menu",
             TYPE.caption,
             PALETTE.muted,
         )

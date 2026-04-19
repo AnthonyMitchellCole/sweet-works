@@ -38,6 +38,13 @@ class Camera:
         self.target_x += dx
         self.target_y += dy
 
+    def pan_instant(self, dx: float, dy: float) -> None:
+        """1:1 pan: moves both current and target, bypassing smoothing."""
+        self.x += dx
+        self.y += dy
+        self.target_x += dx
+        self.target_y += dy
+
     def set_zoom(self, z: float) -> None:
         self.zoom = max(config.MIN_ZOOM, min(config.MAX_ZOOM, z))
 

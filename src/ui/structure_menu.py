@@ -28,9 +28,14 @@ if TYPE_CHECKING:
     from ..buildings.building import Building
 
 
-_PANEL_W = 320
-_PANEL_H = 440
-_MARGIN = 24
+_PANEL_W = 440
+_PANEL_H = 480
+# Margin from the right edge of the window. Larger = the panel slides in
+# further toward screen center (while still living on the right half).
+_MARGIN = 200
+# Fallback minimum margin when the window is narrow enough that the full
+# value would push the panel off-screen left.
+_MIN_MARGIN = 16
 _PAD = THEME.spacing.lg
 _SECTION_GAP = THEME.spacing.md
 _ROW_H = 22
@@ -70,7 +75,9 @@ class StructureMenu:
     def layout(self, window_size: tuple[int, int]) -> None:
         self._window_size = window_size
         w, h = window_size
-        self._final_x = w - _PANEL_W - _MARGIN
+        # Clamp margin on narrow windows so the panel stays fully visible.
+        margin = min(_MARGIN, max(_MIN_MARGIN, (w - _PANEL_W) // 2))
+        self._final_x = max(_MIN_MARGIN, w - _PANEL_W - margin)
         self._offscreen_x = w + 8
         # Keep the menu vertically centered between the HUD bar and the toolbar.
         hud_bottom = 16 + 48 + 8          # top pad + HUD h + gap
@@ -311,8 +318,13 @@ class StructureMenu:
             )
 
         tx = icon_box.right + THEME.spacing.md
+        # Reserve space for the close button so long titles don't collide.
+        title_max_w = max(64, rect.right - _PAD - _CLOSE_SIZE - THEME.spacing.sm - tx)
         title = self.assets.render_text(info.title, TYPE.h1, PALETTE.text_strong)
-        surface.blit(title, (tx, y - 2))
+        title_clip = title.subsurface(
+            pygame.Rect(0, 0, min(title.get_width(), title_max_w), title.get_height())
+        ) if title.get_width() > title_max_w else title
+        surface.blit(title_clip, (tx, y - 2))
         subtitle = self.assets.render_text(info.subtitle, TYPE.caption, PALETTE.muted)
         surface.blit(subtitle, (tx, y + title.get_height()))
 

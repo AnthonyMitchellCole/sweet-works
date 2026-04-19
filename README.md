@@ -42,10 +42,11 @@ If you prefer to pre-populate fonts, drop these `.ttf` files into `assets/fonts/
 
 ## Controls
 
-| Key / Action   | Effect                                          |
-| -------------- | ----------------------------------------------- |
-| WASD / Arrows  | Pan camera                                      |
-| Scroll wheel   | Zoom                                            |
+| Key / Action        | Effect                                     |
+| ------------------- | ------------------------------------------ |
+| WASD / Arrows       | Pan camera                                 |
+| Middle-mouse drag   | Pan camera (1:1, with release inertia)     |
+| Scroll wheel        | Zoom                                       |
 | 1 - 5          | Select prefab (belt, miners, assemblers)        |
 | R              | Rotate placement                                |
 | Left click     | Place                                           |

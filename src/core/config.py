@@ -29,6 +29,11 @@ MAX_ZOOM: float = 2.5
 CAMERA_PAN_SPEED: float = 480.0  # world px / second
 CAMERA_SMOOTH: float = 12.0      # higher = snappier
 
+# Middle-mouse drag-pan.
+CAMERA_DRAG_INERTIA_DECAY: float = 6.0  # higher = inertia stops faster
+CAMERA_DRAG_MIN_SPEED: float = 8.0      # world px/s below which inertia halts
+CAMERA_DRAG_VEL_EMA: float = 0.35       # 0..1; higher = snappier velocity tracking
+
 BELT_FRAMES: int = 4
 BELT_ANIM_HZ: float = 8.0  # frames per second
 
