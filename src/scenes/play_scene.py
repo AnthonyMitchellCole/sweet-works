@@ -6,16 +6,22 @@ import pygame
 
 from ..belts.belt import ConveyorBelt
 from ..belts.network_soa import BeltNetworkSoA
+from ..buildings.building import Building
 from ..buildings.registry import BUILDINGS, BuildingPrefab
 from ..core import config
 from ..core.perf import PERF, timed
 from ..design.palette import PALETTE
 from ..design.typography import TYPE
+from ..rendering.animation import AnimValue
 from ..rendering.renderer import Renderer
+from ..ui import info as info_mod
 from ..ui.cursor import PlacementCursor
+from ..ui.hover_highlight import draw_hover_brackets
 from ..ui.hud import HUD
 from ..ui.perf_hud import PerfHUD
+from ..ui.structure_menu import StructureMenu
 from ..ui.toolbar import Toolbar, ToolSlot
+from ..ui.tooltip import WorldTooltip
 from ..world.camera import Camera
 from ..world.direction import Direction
 from ..world.world import World
@@ -43,6 +49,15 @@ class PlayScene(Scene):
         self.perf_hud: PerfHUD | None = None
         self.toolbar: Toolbar | None = None
         self.cursor: PlacementCursor | None = None
+        self.tooltip: WorldTooltip | None = None
+        self.menu: StructureMenu | None = None
+
+        # Hover state and fade
+        self._hover_building: Building | None = None
+        self._hover_belt: ConveyorBelt | None = None
+        self._hover_origin: tuple[int, int] | None = None
+        self._hover_footprint: tuple[int, int] = (1, 1)
+        self._hover_strength = AnimValue(value=0.0, target=0.0, speed=14.0)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -62,6 +77,9 @@ class PlayScene(Scene):
         )
         self.cursor = PlacementCursor(self.game.assets)
         self.cursor.set_tool(self.toolbar.selected_slot())
+        self.tooltip = WorldTooltip(self.game.assets)
+        self.menu = StructureMenu(self.game.assets)
+        self.menu.layout(window_size)
 
         self.camera.set_center(6 * config.TILE, 4 * config.TILE)
 
@@ -80,11 +98,16 @@ class PlayScene(Scene):
             self.camera.resize(size)
         if self.toolbar is not None:
             self.toolbar.layout(size)
+        if self.menu is not None:
+            self.menu.layout(size)
 
     # -- events ------------------------------------------------------------
 
     def handle_event(self, event: pygame.event.Event) -> None:
         assert self.game is not None
+        # Let the structure menu intercept ESC / its own keys first.
+        if self.menu is not None and self.menu.handle_event(event):
+            return
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 from .menu_scene import MenuScene
@@ -109,6 +132,8 @@ class PlayScene(Scene):
         assert self.toolbar is not None
         assert self.cursor is not None
         assert self.hud is not None
+        assert self.tooltip is not None
+        assert self.menu is not None
 
         self._pan_camera(dt)
         self.camera.update(dt)
@@ -127,11 +152,47 @@ class PlayScene(Scene):
         tile_pos = self.camera.screen_to_tile(*mouse_pos)
         self.cursor.update(dt, tile_pos)
 
-        if not over_ui:
-            if self.game.input.mouse_pressed(1):
-                self._place(tile_pos)
-            if self.game.input.mouse_pressed(3):
-                self.world.remove_at(tile_pos)
+        tool = self.toolbar.selected_slot()
+        is_pointer = tool.id == "pointer"
+        mods = pygame.key.get_mods()
+        alt_held = bool(mods & pygame.KMOD_ALT)
+
+        # Resolve what's under the cursor (building first; else belt/tile).
+        self._refresh_hover(tile_pos, over_ui)
+
+        # Feed the tooltip. Always on in pointer mode; Alt otherwise.
+        show_tooltip = (is_pointer or alt_held) and not over_ui
+        tip_info = None
+        if show_tooltip:
+            if self._hover_building is not None:
+                tip_info = info_mod.for_building(self._hover_building)
+            elif self._hover_belt is not None:
+                tip_info = info_mod.for_belt(
+                    self._hover_belt, self.world.belt_network
+                )
+        self.tooltip.set(tip_info, mouse_pos, avoid=self._toolbar_avoid_rect())
+        self.tooltip.update(dt)
+
+        # Fade the hover brackets based on whether we have a highlight target.
+        target_strength = 1.0 if (tip_info is not None) else 0.0
+        self._hover_strength.to(target_strength)
+        self._hover_strength.update(dt)
+
+        # Structure menu update (uses live building reference).
+        self.menu.update(
+            dt,
+            mouse_pos,
+            self.game.input.mouse(1),
+            self.game.input.mouse_released(1),
+        )
+
+        # LMB dispatch with new Pointer semantics.
+        if not over_ui and self.game.input.mouse_pressed(1):
+            self._on_lmb(tile_pos, is_pointer)
+
+        # RMB: only delete when not in Pointer mode.
+        if not over_ui and self.game.input.mouse_pressed(3) and not is_pointer:
+            self.world.remove_at(tile_pos)
 
         for _ in range(sim_ticks):
             with timed(PERF.tick):
@@ -151,17 +212,26 @@ class PlayScene(Scene):
         assert self.hud is not None
         assert self.perf_hud is not None
         assert self.game is not None
+        assert self.tooltip is not None
+        assert self.menu is not None
 
         surface.fill(PALETTE.bg_deep)
         self.renderer.draw_world(
             surface, self.world, self.camera, self.world.time, self.game.clock.sim_alpha
         )
+
+        self._render_hover_brackets(surface)
+
         self.cursor.render(surface, self.camera)
         self.hud.render(surface, self.game.clock.fps)
         self.toolbar.render(surface)
+        self.menu.render(surface)
+        self.tooltip.render(surface)
+
         snap = PERF.snapshot(fps=self.game.clock.fps)
         self.perf_hud.render(surface, snap)
-        self._render_hint(surface)
+        if not (self.menu is not None and self.menu.is_open):
+            self._render_hint(surface)
 
     # -- helpers -----------------------------------------------------------
 
@@ -193,13 +263,93 @@ class PlayScene(Scene):
         # HUD top bar (padding + 48 h)
         if pos[1] < 16 + 48 + 8:
             return True
+        # Selected-structure menu occupies its own rect.
+        if self.menu is not None:
+            mrect = self.menu.rect()
+            if mrect is not None and mrect.collidepoint(pos):
+                return True
         return False
+
+    def _toolbar_avoid_rect(self) -> pygame.Rect | None:
+        if self.toolbar is None or not self.toolbar._widgets:
+            return None
+        rect = self.toolbar._widgets[0].rect.copy()
+        for w in self.toolbar._widgets[1:]:
+            rect.union_ip(w.rect)
+        return rect.inflate(24, 24)
+
+    def _refresh_hover(self, tile_pos: tuple[int, int], over_ui: bool) -> None:
+        assert self.world is not None
+        if over_ui:
+            self._hover_building = None
+            self._hover_belt = None
+            self._hover_origin = None
+            return
+        b = self.world.building_at(tile_pos)
+        if b is not None:
+            self._hover_building = b
+            self._hover_belt = None
+            self._hover_origin = b.origin
+            self._hover_footprint = b.footprint
+            return
+        tile = self.world.tile_at(tile_pos)
+        if isinstance(tile, ConveyorBelt):
+            self._hover_building = None
+            self._hover_belt = tile
+            self._hover_origin = tile.pos
+            self._hover_footprint = (1, 1)
+            return
+        self._hover_building = None
+        self._hover_belt = None
+        self._hover_origin = None
+
+    def _render_hover_brackets(self, surface: pygame.Surface) -> None:
+        assert self.world is not None
+        assert self.camera is not None
+        if self._hover_origin is None and self._hover_strength.value <= 0.01:
+            return
+        origin = self._hover_origin
+        if origin is None:
+            return
+        draw_hover_brackets(
+            surface,
+            self.camera,
+            origin,
+            self._hover_footprint,
+            time=self.world.time,
+            strength=self._hover_strength.value,
+        )
+
+    def _on_lmb(self, tile_pos: tuple[int, int], is_pointer: bool) -> None:
+        assert self.world is not None
+        assert self.menu is not None
+
+        # Clicking an existing building always opens the menu (no place).
+        b = self.world.building_at(tile_pos)
+        if b is not None:
+            self.menu.open_building(b)
+            return
+
+        # Belt under cursor in pointer mode: open belt menu.
+        if is_pointer:
+            tile = self.world.tile_at(tile_pos)
+            if isinstance(tile, ConveyorBelt):
+                self.menu.open_belt(tile, self.world.belt_network)
+                return
+            # Empty ground click in pointer mode closes the menu.
+            self.menu.close()
+            return
+
+        # Other tools: place as usual.
+        self._place(tile_pos)
 
     def _place(self, tile_pos: tuple[int, int]) -> None:
         assert self.world is not None
         assert self.cursor is not None
         slot = self.cursor.tool
         if slot is None:
+            return
+        if slot.id == "pointer":
             return
         if slot.id == "belt":
             if self.world.is_free(tile_pos):
@@ -215,7 +365,7 @@ class PlayScene(Scene):
     def _render_hint(self, surface: pygame.Surface) -> None:
         assert self.game is not None
         hint = self.game.assets.render_text(
-            "WASD pan  -  scroll zoom  -  1-5 tool  -  R rotate  -  F3 perf  -  LMB place  -  RMB delete  -  ESC menu",
+            "WASD pan  -  scroll zoom  -  Q inspect  -  1-5 tool  -  R rotate  -  F3 perf  -  LMB place/select  -  RMB delete  -  Alt hover info  -  ESC menu",
             TYPE.caption,
             PALETTE.muted,
         )

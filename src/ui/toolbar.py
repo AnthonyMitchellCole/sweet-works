@@ -32,11 +32,12 @@ class ToolSlot:
     id: str
     label: str
     hotkey: int
-    prefab: BuildingPrefab | None = None  # None means belt tool
+    prefab: BuildingPrefab | None = None  # None means belt tool or pointer
 
 
 def default_slots() -> tuple[ToolSlot, ...]:
     return (
+        ToolSlot(id="pointer", label="Inspect", hotkey=pygame.K_q, prefab=None),
         ToolSlot(id="belt", label="Conveyor", hotkey=pygame.K_1, prefab=None),
         ToolSlot(id="miner_iron", label="Iron Miner", hotkey=pygame.K_2, prefab=BUILDINGS.miner_iron),
         ToolSlot(id="miner_copper", label="Copper Miner", hotkey=pygame.K_3, prefab=BUILDINGS.miner_copper),
@@ -72,6 +73,9 @@ class Toolbar:
         self._panel_final_y: int = 0
         self._panel_start_y: int = 0
         self._slide = Tween(start=0.0, end=0.0, duration=THEME.anim.slow, ease=THEME.anim.ease_out)
+
+        # Procedural icon cache (e.g. pointer cursor glyph).
+        self._icon_cache: dict[str, pygame.Surface] = {}
 
         self.layout(window_size, animate_in=True)
 
@@ -155,7 +159,6 @@ class Toolbar:
                 self.select(i)
 
     def render(self, surface: pygame.Surface) -> None:
-        panel_y = self._slide.end - (self._slide.end - self._widgets[0].rect.y + PANEL_PAD)
         actual_panel_y = self._widgets[0].rect.y - PANEL_PAD
         panel_rect = pygame.Rect(
             self._panel_x, actual_panel_y, self._panel_w, self._panel_h
@@ -166,7 +169,6 @@ class Toolbar:
             self._render_slot(surface, slot, w, i)
 
         self._render_tooltip(surface)
-        _ = panel_y
 
     def _render_slot(
         self,
@@ -204,15 +206,39 @@ class Toolbar:
                 icon = pygame.transform.scale(icon, size)
             surface.blit(icon, (ix, iy))
 
-        # Hotkey label
-        label = str(index + 1)
+        # Hotkey label (derived from the slot's pygame key name)
+        label = pygame.key.name(slot.hotkey).upper()
         surf = self.assets.render_text(label, TYPE.label, PALETTE.muted)
         surface.blit(surf, (rect.x + 4, rect.y + 4))
 
     def _icon_for(self, slot: ToolSlot) -> pygame.Surface | None:
+        if slot.id == "pointer":
+            return self._pointer_icon()
         if slot.id == "belt":
             return self.assets.belt("E", 0)
         return self.assets.sprite("building_base")
+
+    def _pointer_icon(self) -> pygame.Surface:
+        """Procedural arrow cursor glyph cached after first build."""
+        cached = self._icon_cache.get("pointer")
+        if cached is not None:
+            return cached
+        size = 40
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        # Classic cursor arrow: tip near (10,8), body slanted down-right.
+        arrow = [
+            (10, 8),
+            (10, 30),
+            (16, 24),
+            (20, 32),
+            (24, 30),
+            (20, 22),
+            (28, 22),
+        ]
+        pygame.draw.polygon(surf, PALETTE.text_strong, arrow)
+        pygame.draw.polygon(surf, PALETTE.bg_deep, arrow, 2)
+        self._icon_cache["pointer"] = surf
+        return surf
 
     def _render_tooltip(self, surface: pygame.Surface) -> None:
         for w, slot in zip(self._widgets, self.slots):

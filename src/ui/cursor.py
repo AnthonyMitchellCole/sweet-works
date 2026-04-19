@@ -48,6 +48,10 @@ class PlacementCursor:
     def render(self, surface: pygame.Surface, camera: Camera) -> None:
         if self.tool is None:
             return
+        # In Pointer (inspect) mode, do not draw a placement ghost. Hover
+        # feedback comes from the hover-highlight brackets instead.
+        if self.tool.id == "pointer":
+            return
 
         size = int(config.TILE * camera.zoom)
         fw, fh = self.footprint()

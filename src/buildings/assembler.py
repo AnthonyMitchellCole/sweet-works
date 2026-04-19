@@ -50,6 +50,22 @@ class Assembler(Building):
         self._input_ports_by_type: dict[int, Port] = {}
         super().__init__(origin, rotation)
 
+    # -- public introspection (UI) -----------------------------------------
+
+    @property
+    def is_crafting(self) -> bool:
+        return self._craft is not None
+
+    @property
+    def craft_progress(self) -> float:
+        return self._craft.progress if self._craft is not None else 0.0
+
+    @property
+    def craft_ticks(self) -> tuple[int, int]:
+        if self._craft is None:
+            return (0, 0)
+        return (self._craft.total - self._craft.remaining, self._craft.total)
+
     def _configure_ports(self) -> None:
         for i, (item_type, _) in enumerate(self.recipe.inputs):
             port = self._add_port(
