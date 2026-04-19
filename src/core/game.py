@@ -21,7 +21,8 @@ class Game:
     def __init__(self) -> None:
         pygame.init()
         pygame.display.set_caption(config.TITLE)
-        self.screen: pygame.Surface = pygame.display.set_mode(config.WINDOW)
+        flags = pygame.RESIZABLE if config.RESIZABLE else 0
+        self.screen: pygame.Surface = pygame.display.set_mode(config.WINDOW, flags)
 
         self.assets = AssetLoader()
         self.assets.prepare()
@@ -61,6 +62,20 @@ class Game:
         self._scenes.append(scene)
         scene.enter(self)
 
+    # -- window ------------------------------------------------------------
+
+    def _on_resize(self, w: int, h: int) -> None:
+        w = max(config.MIN_WINDOW_W, w)
+        h = max(config.MIN_WINDOW_H, h)
+        flags = pygame.RESIZABLE if config.RESIZABLE else 0
+        self.screen = pygame.display.set_mode((w, h), flags)
+        for scene in self._scenes:
+            scene.on_resize((w, h))
+
+    @property
+    def window_size(self) -> tuple[int, int]:
+        return self.screen.get_size()
+
     # -- loop --------------------------------------------------------------
 
     def quit(self) -> None:
@@ -78,6 +93,8 @@ class Game:
             if event.type == pygame.QUIT:
                 self._running = False
                 return
+            if event.type == pygame.VIDEORESIZE:
+                self._on_resize(event.w, event.h)
             self.input.handle(event)
             if self.scene is not None:
                 self.scene.handle_event(event)

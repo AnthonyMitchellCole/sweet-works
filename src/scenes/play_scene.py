@@ -47,12 +47,17 @@ class PlayScene(Scene):
 
     def on_enter(self) -> None:
         assert self.game is not None
+        window_size = self.game.window_size
         self.world = World(self.game.events)
         self.world.belt_network = BeltNetwork()
-        self.camera = Camera(config.WINDOW)
+        self.camera = Camera(window_size)
         self.renderer = Renderer(self.game.assets)
         self.hud = HUD(self.game.assets, self.game.events)
-        self.toolbar = Toolbar(self.game.assets, on_select=self._on_tool_select)
+        self.toolbar = Toolbar(
+            self.game.assets,
+            on_select=self._on_tool_select,
+            window_size=window_size,
+        )
         self.cursor = PlacementCursor(self.game.assets)
         self.cursor.set_tool(self.toolbar.selected_slot())
 
@@ -63,6 +68,12 @@ class PlayScene(Scene):
     def on_exit(self) -> None:
         if self.hud is not None:
             self.hud.close()
+
+    def on_resize(self, size: tuple[int, int]) -> None:
+        if self.camera is not None:
+            self.camera.resize(size)
+        if self.toolbar is not None:
+            self.toolbar.layout(size)
 
     # -- events ------------------------------------------------------------
 

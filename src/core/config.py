@@ -9,7 +9,12 @@ WINDOW_W: int = 1280
 WINDOW_H: int = 720
 WINDOW: tuple[int, int] = (WINDOW_W, WINDOW_H)
 
-FPS: int = 60
+MIN_WINDOW_W: int = 640
+MIN_WINDOW_H: int = 400
+RESIZABLE: bool = True
+
+# 0 = uncapped; any positive integer caps the render loop at that FPS.
+FPS: int = 0
 
 # Fixed-timestep simulation rate (Hz). Decoupled from render.
 TICK_HZ: int = 20

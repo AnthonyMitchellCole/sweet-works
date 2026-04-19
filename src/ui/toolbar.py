@@ -49,6 +49,7 @@ class Toolbar:
         assets: "AssetLoader",
         slots: tuple[ToolSlot, ...] | None = None,
         on_select: Callable[[ToolSlot], None] | None = None,
+        window_size: tuple[int, int] = (config.WINDOW_W, config.WINDOW_H),
     ) -> None:
         self.assets = assets
         self.slots = slots or default_slots()
@@ -60,23 +61,57 @@ class Toolbar:
         self._panel_w = total_w + PANEL_PAD * 2
         self._panel_h = SLOT_SIZE + PANEL_PAD * 2
 
-        self._panel_x = (config.WINDOW_W - self._panel_w) // 2
-        self._panel_final_y = config.WINDOW_H - self._panel_h - 16
-        self._panel_start_y = config.WINDOW_H + 8
-
-        self._slide = Tween(
-            start=self._panel_start_y,
-            end=self._panel_final_y,
-            duration=THEME.anim.slow,
-            ease=THEME.anim.ease_out,
-        )
-
-        self._widgets: list[Widget] = []
-        for i, _ in enumerate(self.slots):
-            x = self._panel_x + PANEL_PAD + i * (SLOT_SIZE + SLOT_GAP)
-            y = self._panel_final_y + PANEL_PAD
-            self._widgets.append(Widget(pygame.Rect(x, y, SLOT_SIZE, SLOT_SIZE)))
+        self._widgets: list[Widget] = [
+            Widget(pygame.Rect(0, 0, SLOT_SIZE, SLOT_SIZE)) for _ in self.slots
+        ]
         self._widgets[self.selected_index].selected = True
+
+        self._panel_x: int = 0
+        self._panel_final_y: int = 0
+        self._panel_start_y: int = 0
+        self._slide = Tween(start=0.0, end=0.0, duration=THEME.anim.slow, ease=THEME.anim.ease_out)
+
+        self.layout(window_size, animate_in=True)
+
+    # -- layout ------------------------------------------------------------
+
+    def layout(self, window_size: tuple[int, int], *, animate_in: bool = False) -> None:
+        w, h = window_size
+        self._panel_x = (w - self._panel_w) // 2
+        self._panel_final_y = h - self._panel_h - 16
+        self._panel_start_y = h + 8
+
+        current_y = self._panel_final_y
+        if animate_in:
+            self._slide = Tween(
+                start=self._panel_start_y,
+                end=self._panel_final_y,
+                duration=THEME.anim.slow,
+                ease=THEME.anim.ease_out,
+            )
+            current_y = self._panel_start_y
+        else:
+            # preserve any in-flight slide offset, just remap to new end
+            progress = 0.0
+            if self._slide.duration > 0:
+                progress = self._slide.elapsed / self._slide.duration
+            self._slide = Tween(
+                start=self._panel_start_y,
+                end=self._panel_final_y,
+                duration=THEME.anim.slow,
+                ease=THEME.anim.ease_out,
+            )
+            self._slide.elapsed = progress * self._slide.duration
+            self._slide.done = progress >= 1.0
+            current_y = self._panel_final_y if self._slide.done else int(
+                self._slide.start
+                + (self._slide.end - self._slide.start)
+                * (self._slide.ease(progress) if 0.0 < progress < 1.0 else progress)
+            )
+
+        for i, widget in enumerate(self._widgets):
+            x = self._panel_x + PANEL_PAD + i * (SLOT_SIZE + SLOT_GAP)
+            widget.rect.topleft = (x, current_y + PANEL_PAD)
 
     # -- API ---------------------------------------------------------------
 

@@ -16,6 +16,17 @@ class Camera:
         self.target_y: float = 0.0
         self.zoom: float = config.DEFAULT_ZOOM
 
+    def resize(self, viewport: tuple[int, int]) -> None:
+        prev_w, prev_h = self.viewport_w, self.viewport_h
+        self.viewport_w, self.viewport_h = viewport
+        # Keep the world point previously at the screen center still centered.
+        dx = (prev_w - viewport[0]) / (2 * self.zoom)
+        dy = (prev_h - viewport[1]) / (2 * self.zoom)
+        self.x += dx
+        self.y += dy
+        self.target_x += dx
+        self.target_y += dy
+
     # -- controls ----------------------------------------------------------
 
     def set_center(self, world_x: float, world_y: float) -> None:
