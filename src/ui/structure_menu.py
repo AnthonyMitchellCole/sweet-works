@@ -59,6 +59,9 @@ _CALLOUT_GAP = THEME.spacing.sm
 _RATE_ROW_H = 24
 _PROGRESS_ROW_H = 44
 _CLOSE_SIZE = 24
+_MOVE_SIZE = 24
+_EDGE_MARGIN = 16         # min distance between the panel and the window edge
+_SLIDE_MARGIN = 24        # extra offscreen distance used by the slide-in origin
 _SHADOW_ALPHA = 150
 
 
@@ -89,9 +92,22 @@ def _phase_progress(reveal: float, key: str) -> float:
 
 
 class StructureMenu:
-    """Right-anchored detail panel, slides in with an ease-out tween."""
+    """Detail panel for the selected structure.
+
+    Opens with a slide-in tween from the window edge closest to the
+    resting position. The resting position defaults to the right-side
+    dock but can be repositioned via the header drag handle. The chosen
+    location is remembered for the rest of the process in a class-level
+    attribute so future opens honour it (including after the user
+    switches scenes and back).
+    """
 
     WorldHighlight = WorldHighlight  # re-expose for consumers
+
+    # Session-level (process-wide) resting position. ``None`` means
+    # "fall back to the default right dock". Set on drag release.
+    _session_pos: tuple[int, int] | None = None
+    _session_anchored: bool = False
 
     def __init__(self, assets: AssetLoader) -> None:
         self.assets = assets
@@ -100,19 +116,29 @@ class StructureMenu:
         self._belt_net: BeltNetworkSoA | None = None
         self._info: StructureInfo | None = None
         self._window_size: tuple[int, int] = (0, 0)
-        self._final_x: int = 0
-        self._offscreen_x: int = 0
-        self._x_tween: Tween = Tween(
-            start=0.0, end=0.0, duration=THEME.anim.slow, ease=THEME.anim.ease_out
-        )
-        self._x_tween.done = True
         self._is_open: bool = False
         self._closing: bool = False
+
+        # Resting position (top-left) as auto-lerped scalars; during a
+        # drag we ``.set()`` them directly so the panel tracks the cursor
+        # 1:1.
+        self._resting_x_anim = AnimValue(value=0.0, target=0.0, speed=14.0)
+        self._resting_y_anim = AnimValue(value=0.0, target=0.0, speed=14.0)
+
+        # Slide-in / slide-out progress. 1.0 = fully at rest, 0.0 = fully
+        # offscreen along ``_slide_edge``. ``_slide_dir`` tracks whether
+        # the current tween is opening (+1) or closing (-1).
+        self._slide_progress: Tween = Tween(
+            start=1.0, end=1.0, duration=THEME.anim.slow, ease=THEME.anim.ease_out
+        )
+        self._slide_progress.done = True
+        self._slide_edge: Direction = Direction.E
+        self._slide_dir: int = +1
+        self._slide_value: float = 1.0
 
         self._panel_h_anim = AnimValue(
             value=float(_MIN_PANEL_H), target=float(_MIN_PANEL_H), speed=14.0
         )
-        self._y_anim = AnimValue(value=0.0, target=0.0, speed=14.0)
         self._reveal_anim = AnimValue(value=0.0, target=0.0, speed=6.5)
 
         self._progress_anim = AnimValue(value=0.0, target=0.0, speed=10.0)
@@ -124,34 +150,77 @@ class StructureMenu:
         self._world_highlight: WorldHighlight | None = None
 
         self._close_btn = Widget(pygame.Rect(0, 0, _CLOSE_SIZE, _CLOSE_SIZE))
+        self._move_btn = Widget(pygame.Rect(0, 0, _MOVE_SIZE, _MOVE_SIZE))
+        self._dragging: bool = False
+        self._drag_grab: tuple[int, int] = (0, 0)
+        self._cursor_overridden: bool = False
 
     # -- layout ------------------------------------------------------------
 
     def layout(self, window_size: tuple[int, int]) -> None:
         self._window_size = window_size
-        w, _h = window_size
-        margin = min(_MARGIN, max(_MIN_MARGIN, (w - _PANEL_W) // 2))
-        self._final_x = max(_MIN_MARGIN, w - _PANEL_W - margin)
-        self._offscreen_x = w + 8
-        self._retarget_y()
-        if self._is_open and not self._closing:
-            self._x_tween = Tween(
-                start=self._current_x(),
-                end=float(self._final_x),
-                duration=THEME.anim.base,
-                ease=THEME.anim.ease_out,
-            )
+        self._reposition_resting(snap=not self._is_open)
 
-    def _retarget_y(self) -> None:
-        _, wh = self._window_size
-        if wh <= 0:
-            return
+    def _default_anchor(self, window_size: tuple[int, int]) -> tuple[int, int]:
+        """Original right-side dock, centered vertically between HUD/toolbar."""
+        w, h = window_size
+        margin = min(_MARGIN, max(_MIN_MARGIN, (w - _PANEL_W) // 2))
+        x = max(_MIN_MARGIN, w - _PANEL_W - margin)
+
+        if h <= 0:
+            return (x, _EDGE_MARGIN)
         hud_bottom = 16 + 48 + 8
-        toolbar_top = wh - (64 + 12 * 2 + 16)
-        panel_h = self._panel_h_anim.target
+        toolbar_top = h - (64 + 12 * 2 + 16)
+        panel_h = max(float(_MIN_PANEL_H), float(self._panel_h_anim.target))
         usable_h = max(panel_h, toolbar_top - hud_bottom)
-        target_y = hud_bottom + max(0, (usable_h - panel_h) / 2)
-        self._y_anim.to(float(target_y))
+        y = hud_bottom + max(0, (usable_h - panel_h) / 2)
+        return (int(x), int(y))
+
+    def _clamp_to_window(
+        self, pos: tuple[int, int], window_size: tuple[int, int]
+    ) -> tuple[int, int]:
+        w, h = window_size
+        pw = _PANEL_W
+        ph = max(int(self._panel_h_anim.target), _MIN_PANEL_H)
+        m = _EDGE_MARGIN
+        # Guard against windows smaller than the panel.
+        max_x = max(m, w - pw - m)
+        max_y = max(m, h - ph - m)
+        x = max(m, min(max_x, int(pos[0])))
+        y = max(m, min(max_y, int(pos[1])))
+        return (x, y)
+
+    def _reposition_resting(self, *, snap: bool = False) -> None:
+        """Recompute resting target from session pos (if any) or default.
+
+        ``snap`` immediately places the resting anims at the new target so
+        the panel does not drift when no animation is desired (e.g. on
+        first open or window resize while closed).
+        """
+        if self._window_size == (0, 0):
+            return
+        if self._dragging:
+            # While dragging, the user is the single source of truth for
+            # the resting position. Just re-clamp to ensure we stay on
+            # screen if the window shrinks beneath us.
+            cur = (int(self._resting_x_anim.value), int(self._resting_y_anim.value))
+            clamped = self._clamp_to_window(cur, self._window_size)
+            self._resting_x_anim.set(float(clamped[0]))
+            self._resting_y_anim.set(float(clamped[1]))
+            return
+
+        if StructureMenu._session_anchored and StructureMenu._session_pos is not None:
+            target = StructureMenu._session_pos
+        else:
+            target = self._default_anchor(self._window_size)
+        target = self._clamp_to_window(target, self._window_size)
+        tx, ty = float(target[0]), float(target[1])
+        if snap:
+            self._resting_x_anim.set(tx)
+            self._resting_y_anim.set(ty)
+        else:
+            self._resting_x_anim.to(tx)
+            self._resting_y_anim.to(ty)
 
     # -- API ---------------------------------------------------------------
 
@@ -162,9 +231,10 @@ class StructureMenu:
     def rect(self) -> pygame.Rect | None:
         if not self._is_open:
             return None
+        x, y = self._current_pos()
         return pygame.Rect(
-            int(self._current_x()),
-            int(self._y_anim.value),
+            int(x),
+            int(y),
             _PANEL_W,
             int(self._panel_h_anim.value),
         )
@@ -191,15 +261,21 @@ class StructureMenu:
             return
         self._closing = True
         self._reveal_anim.to(0.0)
-        self._x_tween = Tween(
-            start=self._current_x(),
-            end=float(self._offscreen_x),
+        # Re-pick the slide edge from the *current* resting position so
+        # that if the user dragged mid-session we still exit out of the
+        # closest edge.
+        rx, ry = self._resting_x_anim.value, self._resting_y_anim.value
+        self._slide_edge = self._pick_slide_edge((int(rx), int(ry)))
+        self._slide_progress = Tween(
+            start=float(self._slide_value),
+            end=0.0,
             duration=THEME.anim.base,
             ease=THEME.anim.ease_out,
         )
 
     def _begin_open(self) -> None:
         already_open = self._is_open and not self._closing
+        was_closing = self._is_open and self._closing
         self._is_open = True
         self._closing = False
         self._progress_anim.set(0.0)
@@ -209,20 +285,64 @@ class StructureMenu:
         self._world_highlight = None
         self._reveal_anim.set(0.0)
         self._reveal_anim.to(1.0)
+
         if already_open:
-            self._x_tween = Tween(
-                start=self._current_x(),
-                end=float(self._final_x),
-                duration=THEME.anim.base,
-                ease=THEME.anim.ease_out,
-            )
-        else:
-            self._x_tween = Tween(
-                start=float(self._offscreen_x),
-                end=float(self._final_x),
-                duration=THEME.anim.slow,
-                ease=THEME.anim.ease_out,
-            )
+            # Morph in place: reuse the current resting position and keep
+            # the panel fully settled (slide value stays at 1.0).
+            return
+
+        # First open of this selection: ensure the resting anims are
+        # parked exactly at the configured target so the slide tween can
+        # pull the panel in from the chosen edge.
+        self._reposition_resting(snap=True)
+        start = float(self._slide_value) if was_closing else 0.0
+        rx = int(self._resting_x_anim.target)
+        ry = int(self._resting_y_anim.target)
+        self._slide_edge = self._pick_slide_edge((rx, ry))
+        self._slide_progress = Tween(
+            start=start,
+            end=1.0,
+            duration=THEME.anim.slow,
+            ease=THEME.anim.ease_out,
+        )
+        self._slide_value = start
+
+    # -- slide helpers -----------------------------------------------------
+
+    def _pick_slide_edge(self, resting_pos: tuple[int, int]) -> Direction:
+        w, h = self._window_size
+        if w <= 0 or h <= 0:
+            return Direction.E
+        pw = _PANEL_W
+        ph = max(int(self._panel_h_anim.target), _MIN_PANEL_H)
+        cx = resting_pos[0] + pw / 2
+        cy = resting_pos[1] + ph / 2
+        distances = {
+            Direction.W: cx,
+            Direction.E: w - cx,
+            Direction.N: cy,
+            Direction.S: h - cy,
+        }
+        return min(distances, key=lambda d: distances[d])
+
+    def _slide_origin_delta(self) -> tuple[int, int]:
+        pw = _PANEL_W
+        ph = max(int(self._panel_h_anim.target), _MIN_PANEL_H)
+        m = _SLIDE_MARGIN
+        if self._slide_edge is Direction.W:
+            return (-(pw + m), 0)
+        if self._slide_edge is Direction.E:
+            return (+(pw + m), 0)
+        if self._slide_edge is Direction.N:
+            return (0, -(ph + m))
+        return (0, +(ph + m))
+
+    def _current_pos(self) -> tuple[float, float]:
+        rx = self._resting_x_anim.value
+        ry = self._resting_y_anim.value
+        eased_off = 1.0 - max(0.0, min(1.0, self._slide_value))
+        ox, oy = self._slide_origin_delta()
+        return (rx + ox * eased_off, ry + oy * eased_off)
 
     # -- events ------------------------------------------------------------
 
@@ -244,12 +364,14 @@ class StructureMenu:
         mouse_released: bool,
     ) -> None:
         self._time += dt
-        self._x_tween.update(dt)
+        self._slide_value = float(self._slide_progress.update(dt))
         self._reveal_anim.update(dt)
 
-        if self._closing and self._x_tween.done:
+        if self._closing and self._slide_progress.done:
             self._is_open = False
             self._closing = False
+            self._dragging = False
+            self._reset_cursor()
             self._building = None
             self._belt = None
             self._belt_net = None
@@ -267,8 +389,13 @@ class StructureMenu:
         target_h = float(self._measure_panel_height(self._info))
         self._panel_h_anim.to(target_h)
         self._panel_h_anim.update(dt)
-        self._retarget_y()
-        self._y_anim.update(dt)
+
+        # Recompute resting target each frame: handles panel-height
+        # changes (when not anchored) and window resizes. While dragging
+        # this is a no-op except for clamping.
+        self._reposition_resting()
+        self._resting_x_anim.update(dt)
+        self._resting_y_anim.update(dt)
 
         target_progress = (
             self._info.progress
@@ -293,6 +420,25 @@ class StructureMenu:
             self._world_highlight = None
             return
 
+        # Button positions (header).
+        self._close_btn.rect.topleft = (
+            panel_rect.right - _PAD - _CLOSE_SIZE,
+            panel_rect.top + (_HEADER_H - _CLOSE_SIZE) // 2 + 4,
+        )
+        self._move_btn.rect.topleft = (
+            panel_rect.right - _PAD - _CLOSE_SIZE - THEME.spacing.xs - _MOVE_SIZE,
+            panel_rect.top + (_HEADER_H - _MOVE_SIZE) // 2 + 4,
+        )
+
+        # Drag handling. The move button is polled first so the close
+        # button does not steal its press when the user starts a drag.
+        self._update_drag(mouse_pos, mouse_down, mouse_released)
+
+        self._close_btn.update(dt, mouse_pos, mouse_down)
+        self._move_btn.update(dt, mouse_pos, mouse_down)
+        if not self._dragging and self._close_btn.clicked(mouse_released):
+            self.close()
+
         # Compute diagram hit rects from current layout (pure math,
         # no drawing).
         diag_center = self._diagram_center(panel_rect, self._info)
@@ -300,22 +446,72 @@ class StructureMenu:
 
         # Port hover hit-test (uses the inflated hit_rect so hovering
         # the marker is forgiving even though the visual stays crisp).
+        # Suppress port hover while dragging to avoid flickering world
+        # highlights across the dragged path.
         self._hovered_port_index = None
-        for hit in self._port_hits:
-            if hit.hit_rect.collidepoint(mouse_pos):
-                self._hovered_port_index = hit.index
-                break
+        if not self._dragging:
+            for hit in self._port_hits:
+                if hit.hit_rect.collidepoint(mouse_pos):
+                    self._hovered_port_index = hit.index
+                    break
 
         self._world_highlight = self._compute_world_highlight()
 
-        # Close button position.
-        self._close_btn.rect.topleft = (
-            panel_rect.right - _PAD - _CLOSE_SIZE,
-            panel_rect.top + (_HEADER_H - _CLOSE_SIZE) // 2 + 4,
-        )
-        self._close_btn.update(dt, mouse_pos, mouse_down)
-        if self._close_btn.clicked(mouse_released):
-            self.close()
+    # -- drag --------------------------------------------------------------
+
+    def _update_drag(
+        self,
+        mouse_pos: tuple[int, int],
+        mouse_down: bool,
+        mouse_released: bool,
+    ) -> None:
+        if not self._is_open or self._closing:
+            if self._dragging:
+                self._dragging = False
+                self._reset_cursor()
+            return
+
+        if not self._dragging:
+            if (
+                mouse_down
+                and self._move_btn.rect.collidepoint(mouse_pos)
+            ):
+                self._dragging = True
+                rx = int(self._resting_x_anim.value)
+                ry = int(self._resting_y_anim.value)
+                self._drag_grab = (mouse_pos[0] - rx, mouse_pos[1] - ry)
+                self._set_cursor(pygame.SYSTEM_CURSOR_SIZEALL)
+            return
+
+        # Active drag: track the cursor 1:1 (no tween).
+        nx = mouse_pos[0] - self._drag_grab[0]
+        ny = mouse_pos[1] - self._drag_grab[1]
+        cx, cy = self._clamp_to_window((nx, ny), self._window_size)
+        self._resting_x_anim.set(float(cx))
+        self._resting_y_anim.set(float(cy))
+
+        if not mouse_down or mouse_released:
+            self._dragging = False
+            StructureMenu._session_pos = (cx, cy)
+            StructureMenu._session_anchored = True
+            self._reset_cursor()
+
+    def _set_cursor(self, cursor: int) -> None:
+        try:
+            pygame.mouse.set_cursor(cursor)
+            self._cursor_overridden = True
+        except pygame.error:
+            # Headless / unsupported platforms: silently ignore.
+            pass
+
+    def _reset_cursor(self) -> None:
+        if not self._cursor_overridden:
+            return
+        try:
+            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
+        except pygame.error:
+            pass
+        self._cursor_overridden = False
 
     def _compute_info(self) -> StructureInfo | None:
         if self._building is not None:
@@ -337,16 +533,6 @@ class StructureMenu:
         cx, cy = port.cell_offset
         accent = port.item.color if port.item is not None else self._info.accent
         return WorldHighlight(cell=(ox + cx, oy + cy), footprint=(1, 1), accent=accent)
-
-    def _current_x(self) -> float:
-        if self._x_tween.done:
-            return float(self._x_tween.end)
-        if self._x_tween.duration <= 0:
-            return float(self._x_tween.end)
-        t = self._x_tween.ease(
-            min(1.0, self._x_tween.elapsed / self._x_tween.duration)
-        )
-        return self._x_tween.start + (self._x_tween.end - self._x_tween.start) * t
 
     # -- measurement -------------------------------------------------------
 
@@ -409,17 +595,15 @@ class StructureMenu:
         if info is None:
             return
 
-        x = int(self._current_x())
-        y = int(self._y_anim.value)
+        x, y = self._current_pos()
+        x = int(x)
+        y = int(y)
         panel_h = int(self._panel_h_anim.value)
         rect = pygame.Rect(x, y, _PANEL_W, panel_h)
 
-        span = float(self._offscreen_x - self._final_x)
-        slide_reveal = 1.0 if span <= 0 else max(
-            0.0,
-            min(1.0, 1.0 - (x - self._final_x) / span),
-        )
-        slide_reveal = max(0.05, slide_reveal)
+        # Drop-shadow alpha follows the slide progress so a panel mid
+        # slide-in doesn't cast a full shadow on empty space.
+        slide_reveal = max(0.05, min(1.0, self._slide_value))
 
         with acquired((rect.w + 12, rect.h + 12)) as shadow:
             shadow.fill(with_alpha(PALETTE.bg_deep, int(_SHADOW_ALPHA * slide_reveal)))
@@ -448,6 +632,7 @@ class StructureMenu:
                 surface, rect, cursor_y, info, reveal
             )
 
+        self._render_move_button(surface, reveal)
         self._render_close_button(surface, reveal)
 
     # -- sections ----------------------------------------------------------
@@ -516,7 +701,10 @@ class StructureMenu:
             )
 
         tx = icon_box.right + THEME.spacing.md
-        title_max_w = max(64, rect.right - _PAD - _CLOSE_SIZE - THEME.spacing.sm - tx)
+        # Reserve space for both the move button and the close button so
+        # long titles don't overlap either header control.
+        controls_w = _CLOSE_SIZE + THEME.spacing.xs + _MOVE_SIZE
+        title_max_w = max(64, rect.right - _PAD - controls_w - THEME.spacing.sm - tx)
         title_full = self.assets.render_text(info.title, TYPE.h1, PALETTE.text_strong)
         title = (
             title_full.subsurface(
@@ -929,6 +1117,40 @@ class StructureMenu:
                 2,
             )
         return bar_y + bar_rect.h + _SECTION_GAP
+
+    # -- header buttons ----------------------------------------------------
+
+    def _render_move_button(self, surface: pygame.Surface, reveal: float) -> None:
+        phase = _phase_progress(reveal, "header")
+        if phase <= 0.01:
+            return
+        r = self._move_btn.rect
+        hover = self._move_btn.hover_anim.value
+        press = 1.0 if self._dragging else self._move_btn.press_anim.value
+        bg = lighten(PALETTE.bg_raised, 0.12 * hover) if hover > 0 else PALETTE.bg_raised
+        with acquired(r.size) as layer:
+            lr = pygame.Rect(0, 0, r.w, r.h)
+            beveled_panel(layer, lr, fill=bg, border=PALETTE.line)
+            tint = (
+                lighten(PALETTE.secondary, 0.25 * hover)
+                if hover > 0
+                else PALETTE.text_body
+            )
+            # 4-arrow compass grip. Arms shrink slightly while pressing
+            # so the button "clicks" under the cursor.
+            inset = 5 + int(press * 1)
+            cx, cy = r.w // 2, r.h // 2
+            arm = (r.w // 2) - inset
+            if arm > 2:
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    tip = (cx + dx * arm, cy + dy * arm)
+                    pygame.draw.line(layer, tint, (cx, cy), tip, 2)
+                    perp = (-dy, dx)
+                    h1 = (tip[0] - dx * 3 + perp[0] * 3, tip[1] - dy * 3 + perp[1] * 3)
+                    h2 = (tip[0] - dx * 3 - perp[0] * 3, tip[1] - dy * 3 - perp[1] * 3)
+                    pygame.draw.polygon(layer, tint, [tip, h1, h2])
+            layer.set_alpha(int(255 * phase))
+            surface.blit(layer, r.topleft)
 
     # -- close button ------------------------------------------------------
 

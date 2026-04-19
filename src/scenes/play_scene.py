@@ -22,6 +22,7 @@ from ..ui.cursor import PlacementCursor
 from ..ui.hover_highlight import draw_hover_brackets
 from ..ui.hud import HUD
 from ..ui.perf_hud import PerfHUD
+from ..ui.sprite_studio import SpriteStudio
 from ..ui.structure_menu import StructureMenu
 from ..ui.toolbar import Toolbar, ToolSlot
 from ..ui.tooltip import WorldTooltip
@@ -54,6 +55,7 @@ class PlayScene(Scene):
         self.cursor: PlacementCursor | None = None
         self.tooltip: WorldTooltip | None = None
         self.menu: StructureMenu | None = None
+        self.studio: SpriteStudio | None = None
 
         # Hover state and fade
         self._hover_building: Building | None = None
@@ -89,6 +91,8 @@ class PlayScene(Scene):
         self.tooltip = WorldTooltip(self.game.assets)
         self.menu = StructureMenu(self.game.assets)
         self.menu.layout(window_size)
+        self.studio = SpriteStudio(self.game.assets)
+        self.studio.layout(window_size)
 
         self.camera.set_center(6 * config.TILE, 4 * config.TILE)
 
@@ -110,11 +114,17 @@ class PlayScene(Scene):
             self.toolbar.layout(size)
         if self.menu is not None:
             self.menu.layout(size)
+        if self.studio is not None:
+            self.studio.layout(size)
 
     # -- events ------------------------------------------------------------
 
     def handle_event(self, event: pygame.event.Event) -> None:
         assert self.game is not None
+        # The Sprite Studio takes priority so its clicks never leak to
+        # the world or the structure menu beneath it.
+        if self.studio is not None and self.studio.handle_event(event):
+            return
         # Let the structure menu intercept ESC / its own keys first.
         if self.menu is not None and self.menu.handle_event(event):
             return
@@ -127,6 +137,8 @@ class PlayScene(Scene):
                 self.cursor.rotate_cw()
             elif event.key == pygame.K_F3 and self.perf_hud is not None:
                 self.perf_hud.toggle()
+            elif event.key == pygame.K_F4 and self.studio is not None:
+                self.studio.toggle()
             elif self.toolbar is not None and self.toolbar.handle_hotkey(event.key):
                 pass
         elif event.type == pygame.MOUSEWHEEL and self.camera is not None:
@@ -198,9 +210,21 @@ class PlayScene(Scene):
             self.game.input.mouse_released(1),
         )
 
+        # Sprite Studio update (F4 overlay).
+        if self.studio is not None:
+            self.studio.update(
+                dt,
+                mouse_pos,
+                self.game.input.mouse(1),
+                self.game.input.mouse_released(1),
+            )
+
+        studio_open = self.studio is not None and self.studio.is_open
+
         # LMB/RMB dispatch is suppressed while middle-mouse panning is active,
-        # so drags never accidentally place or delete.
-        if not over_ui and not self._drag_active:
+        # or while the studio is open (otherwise clicks beneath it would
+        # place/delete buildings in the world).
+        if not over_ui and not self._drag_active and not studio_open:
             if self.game.input.mouse_pressed(1):
                 self._on_lmb(tile_pos, is_pointer)
             if self.game.input.mouse_pressed(3) and not is_pointer:
@@ -243,7 +267,11 @@ class PlayScene(Scene):
 
         snap = PERF.snapshot(fps=self.game.clock.fps)
         self.perf_hud.render(surface, snap)
-        if not (self.menu is not None and self.menu.is_open):
+        if self.studio is not None:
+            self.studio.render(surface)
+        if not (self.menu is not None and self.menu.is_open) and not (
+            self.studio is not None and self.studio.is_open
+        ):
             self._render_hint(surface)
 
     # -- helpers -----------------------------------------------------------
@@ -365,11 +393,16 @@ class PlayScene(Scene):
         # HUD top bar (padding + 48 h)
         if pos[1] < 16 + 48 + 8:
             return True
-        # Selected-structure menu occupies its own rect.
+        # Selected-structure menu occupies its own rect. The menu is
+        # responsible for its own internal controls (close + drag
+        # handle); covering the full rect here is enough to suppress
+        # world interaction while the user drags the panel around.
         if self.menu is not None:
             mrect = self.menu.rect()
             if mrect is not None and mrect.collidepoint(pos):
                 return True
+        if self.studio is not None and self.studio.is_open:
+            return True
         return False
 
     def _toolbar_avoid_rect(self) -> pygame.Rect | None:
@@ -478,7 +511,7 @@ class PlayScene(Scene):
     def _render_hint(self, surface: pygame.Surface) -> None:
         assert self.game is not None
         hint = self.game.assets.render_text(
-            "WASD / MMB drag pan  -  scroll zoom  -  Q inspect  -  1-5 tool  -  R rotate  -  F3 perf  -  LMB place/select  -  RMB delete  -  Alt hover info  -  ESC menu",
+            "WASD / MMB drag pan  -  scroll zoom  -  Q inspect  -  1-5 tool  -  R rotate  -  F3 perf  -  F4 sprite studio  -  LMB place/select  -  RMB delete  -  Alt hover info  -  ESC menu",
             TYPE.caption,
             PALETTE.muted,
         )

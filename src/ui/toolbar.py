@@ -216,6 +216,22 @@ class Toolbar:
             return self._pointer_icon()
         if slot.id == "belt":
             return self.assets.belt("E", 0)
+        if slot.prefab is not None and slot.prefab.sprite_base != "building_base":
+            key = f"{slot.prefab.sprite_base}_idle_f0"
+            try:
+                icon = self.assets.sprite(key)
+            except FileNotFoundError:
+                return self.assets.sprite("building_base")
+            # Scale 2x2 structure sprites down to fit a single toolbar slot.
+            target = SLOT_SIZE - 12
+            if icon.get_width() != target:
+                cache_key = f"toolbar:{key}"
+                cached = self._icon_cache.get(cache_key)
+                if cached is None:
+                    cached = pygame.transform.smoothscale(icon, (target, target))
+                    self._icon_cache[cache_key] = cached
+                return cached
+            return icon
         return self.assets.sprite("building_base")
 
     def _pointer_icon(self) -> pygame.Surface:

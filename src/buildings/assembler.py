@@ -43,12 +43,25 @@ class Assembler(Building):
     footprint = (2, 2)
 
     def __init__(
-        self, origin: Coord, recipe: Recipe, rotation: Direction = Direction.E
+        self,
+        origin: Coord,
+        recipe: Recipe,
+        rotation: Direction = Direction.E,
+        *,
+        sprite_base: str | None = None,
     ) -> None:
         self.recipe = recipe
         self._craft: _Craft | None = None
         self._input_ports_by_type: dict[int, Port] = {}
-        super().__init__(origin, rotation)
+        super().__init__(origin, rotation, sprite_base=sprite_base)
+
+    # -- animation state hooks --------------------------------------------
+
+    def is_active(self) -> bool:
+        return self._craft is not None
+
+    def anim_progress(self) -> float:
+        return self.craft_progress
 
     # -- public introspection (UI) -----------------------------------------
 

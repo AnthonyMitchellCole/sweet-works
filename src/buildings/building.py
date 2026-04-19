@@ -27,13 +27,32 @@ class Building:
 
     name: str = "building"
     footprint: tuple[int, int] = (1, 1)
+    sprite_base: str = "building_base"
 
-    def __init__(self, origin: Coord, rotation: Direction = Direction.E) -> None:
+    def __init__(
+        self,
+        origin: Coord,
+        rotation: Direction = Direction.E,
+        *,
+        sprite_base: str | None = None,
+    ) -> None:
         self.origin: Coord = origin
         self.rotation: Direction = rotation
         self.inputs: list[Port] = []
         self.outputs: list[Port] = []
+        if sprite_base is not None:
+            self.sprite_base = sprite_base
         self._configure_ports()
+
+    # -- animation state hooks --------------------------------------------
+
+    def is_active(self) -> bool:
+        """Return ``True`` while the building's animated "active" phase should play."""
+        return False
+
+    def anim_progress(self) -> float:
+        """Normalised 0..1 animation position while active."""
+        return 0.0
 
     # -- port layout -------------------------------------------------------
 
@@ -95,28 +114,49 @@ class Building:
         time: float,
         sim_alpha: float,
     ) -> None:
-        w, h = self.footprint
-        base = assets.sprite_scaled("building_base", camera.zoom)
-        size = base.get_width()
-        for dy in range(h):
-            for dx in range(w):
-                x, y = camera.world_to_screen(
-                    (self.origin[0] + dx) * config.TILE,
-                    (self.origin[1] + dy) * config.TILE,
-                )
-                surface.blit(base, (x, y))
-        self._render_accent(surface, camera, size)
-        self._render_ports(surface, camera, size)
-
-    def _render_accent(self, surface: pygame.Surface, camera: Camera, size: int) -> None:
-        w, h = self.footprint
-        ox, oy = self.origin
-        x, y = camera.world_to_screen(ox * config.TILE, oy * config.TILE)
-        rect = pygame.Rect(
-            x + size // 4, y + size // 4, size * w - size // 2, size * h - size // 2
+        phase, frame = self._resolve_anim_frame()
+        x, y = camera.world_to_screen(
+            self.origin[0] * config.TILE, self.origin[1] * config.TILE
         )
-        pygame.draw.rect(surface, PALETTE.surface, rect)
-        pygame.draw.rect(surface, PALETTE.line, rect, 1)
+        fw, fh = self.footprint
+
+        sprite = self._resolve_structure_sprite(assets, phase, frame, camera.zoom)
+        if sprite is not None:
+            surface.blit(sprite, (x, y))
+            port_size = sprite.get_width() // max(1, fw)
+        else:
+            base = assets.sprite_scaled("building_base", camera.zoom)
+            port_size = base.get_width()
+            for dy in range(fh):
+                for dx in range(fw):
+                    bx, by = camera.world_to_screen(
+                        (self.origin[0] + dx) * config.TILE,
+                        (self.origin[1] + dy) * config.TILE,
+                    )
+                    surface.blit(base, (bx, by))
+
+        self._render_ports(surface, camera, port_size)
+
+    def _resolve_anim_frame(self) -> tuple[str, int]:
+        if self.is_active():
+            frames = max(1, config.STRUCTURE_FRAMES)
+            return "active", int(self.anim_progress() * frames) % frames
+        return "idle", 0
+
+    def _resolve_structure_sprite(
+        self,
+        assets: AssetLoader,
+        phase: str,
+        frame: int,
+        zoom: float,
+    ) -> pygame.Surface | None:
+        if not self.sprite_base or self.sprite_base == "building_base":
+            return None
+        key = f"{self.sprite_base}_{phase}_f{frame}"
+        try:
+            return assets.sprite_scaled(key, zoom)
+        except FileNotFoundError:
+            return None
 
     def _render_ports(self, surface: pygame.Surface, camera: Camera, size: int) -> None:
         for port in self.inputs:

@@ -127,3 +127,30 @@ class AssetLoader:
     def item_icon_scaled(self, item_id: str, zoom: float) -> pygame.Surface:
         key = f"item_{item_id}"
         return self._scaled.get(key, self.sprite(key), zoom)
+
+    # -- structure frames & hot-reload -------------------------------------
+
+    def structure_frame(
+        self,
+        spec_id: str,
+        phase: str,
+        frame: int,
+        zoom: float | None = None,
+    ) -> pygame.Surface:
+        """Fetch a per-phase, per-frame structure sprite, optionally pre-scaled."""
+        from .sprites.catalog import structure_key
+
+        key = structure_key(spec_id, phase, frame)
+        if zoom is None:
+            return self.sprite(key)
+        return self.sprite_scaled(key, zoom)
+
+    def reload_sprite(self, key: str) -> None:
+        """Drop a single sprite + its scaled variants so the next access reloads from disk."""
+        self._sprites.pop(key, None)
+        self._scaled.invalidate(key)
+
+    def reload_all_sprites(self) -> None:
+        """Drop every cached sprite + scaled variant (leaves fonts/text intact)."""
+        self._sprites.clear()
+        self._scaled.invalidate()

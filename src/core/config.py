@@ -37,6 +37,10 @@ CAMERA_DRAG_VEL_EMA: float = 0.35       # 0..1; higher = snappier velocity track
 BELT_FRAMES: int = 4
 BELT_ANIM_HZ: float = 8.0  # frames per second
 
+# Per-structure sprite animation cycle (idle uses a single frame).
+STRUCTURE_FRAMES: int = 6
+STRUCTURE_ANIM_HZ: float = 6.0  # frames per second, for derived preview clocks
+
 # -- performance tunables ---------------------------------------------------
 
 # Per-chunk tile dimension for the baked chunk-atlas renderer.

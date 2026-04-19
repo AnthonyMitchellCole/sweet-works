@@ -24,14 +24,24 @@ class Miner(Building):
         item: ItemType,
         period_ticks: int = 12,
         rotation: Direction = Direction.E,
+        *,
+        sprite_base: str | None = None,
     ) -> None:
         self.item = item
         self.period_ticks = max(1, period_ticks)
         self._timer: int = 0
-        super().__init__(origin, rotation)
+        super().__init__(origin, rotation, sprite_base=sprite_base)
 
     def _configure_ports(self) -> None:
         self._add_port(PortKind.OUTPUT, side=self.rotation, cell_offset=(0, 0))
+
+    # -- animation state hooks --------------------------------------------
+
+    def is_active(self) -> bool:
+        return self._timer > 0
+
+    def anim_progress(self) -> float:
+        return min(1.0, self._timer / self.period_ticks)
 
     def tick(self, world: World) -> None:
         self._timer += 1

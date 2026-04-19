@@ -9,6 +9,7 @@ selected-structure menu display, so any regression in
 from __future__ import annotations
 
 import pygame
+import pytest
 
 from src.belts.belt import ConveyorBelt
 from src.buildings.port import PortKind
@@ -196,7 +197,33 @@ class _StubAssets:
         raise FileNotFoundError(item_id)
 
 
-def test_structure_menu_world_highlight_follows_hovered_port() -> None:
+@pytest.fixture
+def reset_menu_session():
+    """Clear process-wide StructureMenu session state around each test."""
+    from src.ui.structure_menu import StructureMenu
+
+    prev_pos = StructureMenu._session_pos
+    prev_anchored = StructureMenu._session_anchored
+    StructureMenu._session_pos = None
+    StructureMenu._session_anchored = False
+    try:
+        yield
+    finally:
+        StructureMenu._session_pos = prev_pos
+        StructureMenu._session_anchored = prev_anchored
+
+
+def _snap_menu_to_rest(menu) -> None:
+    """Force all menu animations into their fully-settled state."""
+    menu._slide_progress.elapsed = menu._slide_progress.duration
+    menu._slide_progress.done = True
+    menu._slide_value = 1.0
+    menu._panel_h_anim.value = menu._panel_h_anim.target
+    menu._resting_x_anim.value = menu._resting_x_anim.target
+    menu._resting_y_anim.value = menu._resting_y_anim.target
+
+
+def test_structure_menu_world_highlight_follows_hovered_port(reset_menu_session) -> None:
     pygame.init()
     try:
         from src.ui.structure_diagram import layout_diagram
@@ -209,16 +236,13 @@ def test_structure_menu_world_highlight_follows_hovered_port() -> None:
         miner = BUILDINGS.miner_iron.factory(origin, Direction.E)
         menu.open_building(miner)
 
-        # Snap the slide-in tween so the panel is at its final resting x.
-        menu._x_tween.done = True
-
         # Initial update with mouse far off to populate info + layout.
         menu.update(0.016, (-9999, -9999), False, False)
         assert menu.world_highlight() is None
 
-        # Snap dynamic panel animations so the rect stabilises.
-        menu._panel_h_anim.value = menu._panel_h_anim.target
-        menu._y_anim.value = menu._y_anim.target
+        # Snap every animation to its fully-settled state so the panel
+        # rect stops moving between frames.
+        _snap_menu_to_rest(menu)
 
         info = menu._info
         panel_rect = menu.rect()
@@ -233,9 +257,125 @@ def test_structure_menu_world_highlight_follows_hovered_port() -> None:
         menu.update(0.016, mouse, False, False)
         highlight = menu.world_highlight()
         assert highlight is not None
-        # Highlight cell = origin + rotated cell_offset; miner port is at (0,0).
+        # Highlight cell = origin + cell_offset; miner port is at (0,0).
         assert highlight.cell == origin
         assert highlight.footprint == (1, 1)
         assert highlight.accent == ITEMS.iron.color
+    finally:
+        pygame.quit()
+
+
+# ---------------------------------------------------------------------------
+# Draggable StructureMenu
+# ---------------------------------------------------------------------------
+
+
+def test_menu_saves_session_position_after_drag(reset_menu_session) -> None:
+    pygame.init()
+    try:
+        from src.ui.structure_menu import StructureMenu
+
+        menu = StructureMenu(_StubAssets())  # type: ignore[arg-type]
+        menu.layout((1280, 720))
+
+        miner = BUILDINGS.miner_iron.factory((3, 3), Direction.E)
+        menu.open_building(miner)
+        menu.update(0.016, (-1, -1), False, False)
+        _snap_menu_to_rest(menu)
+        menu.update(0.016, (-1, -1), False, False)
+
+        # Capture the pre-drag resting position to derive the expected
+        # drop location below.
+        initial_resting = (
+            int(menu._resting_x_anim.value),
+            int(menu._resting_y_anim.value),
+        )
+
+        # Grab: mouse-down over the move button.
+        grip = menu._move_btn.rect
+        grab_point = grip.center
+        grab_offset = (
+            grab_point[0] - initial_resting[0],
+            grab_point[1] - initial_resting[1],
+        )
+        menu.update(0.016, grab_point, True, False)
+        assert menu._dragging is True
+
+        # Pick a drop location so the resulting panel (mouse - grab offset)
+        # still lands inside the safe clamp rect. Using a panel top-left
+        # around (200, 120) keeps everything on a 1280x720 window.
+        desired_resting = (200, 120)
+        target_mouse = (
+            desired_resting[0] + grab_offset[0],
+            desired_resting[1] + grab_offset[1],
+        )
+        menu.update(0.016, target_mouse, True, False)
+        assert menu._dragging is True
+        menu.update(0.016, target_mouse, False, True)
+
+        assert menu._dragging is False
+        assert StructureMenu._session_anchored is True
+        saved = StructureMenu._session_pos
+        assert saved is not None
+
+        # The drop should land at the desired resting position (clamping
+        # is a no-op for a location well inside the window).
+        assert abs(saved[0] - desired_resting[0]) <= 1
+        assert abs(saved[1] - desired_resting[1]) <= 1
+        # ...and the saved position should differ meaningfully from the
+        # default right-dock anchor.
+        assert saved != initial_resting
+    finally:
+        pygame.quit()
+
+
+def test_menu_second_open_reuses_session_position(reset_menu_session) -> None:
+    pygame.init()
+    try:
+        from src.ui.structure_menu import StructureMenu
+
+        StructureMenu._session_pos = (120, 80)
+        StructureMenu._session_anchored = True
+
+        menu = StructureMenu(_StubAssets())  # type: ignore[arg-type]
+        menu.layout((1280, 720))
+
+        miner = BUILDINGS.miner_iron.factory((1, 1), Direction.E)
+        menu.open_building(miner)
+        # Pump a frame then snap animations so rect() returns the resting pos.
+        menu.update(0.016, (-1, -1), False, False)
+        _snap_menu_to_rest(menu)
+        menu.update(0.016, (-1, -1), False, False)
+
+        r = menu.rect()
+        assert r is not None
+        assert abs(r.x - 120) <= 1
+        assert abs(r.y - 80) <= 1
+    finally:
+        pygame.quit()
+
+
+def test_slide_edge_picks_closest(reset_menu_session) -> None:
+    pygame.init()
+    try:
+        from src.ui.structure_menu import StructureMenu
+
+        menu = StructureMenu(_StubAssets())  # type: ignore[arg-type]
+        menu.layout((1280, 720))
+        # Use the minimum panel height for a deterministic center.
+        menu._panel_h_anim.target = 320
+
+        # With a 600x320 panel on a 1280x720 window the center (cx, cy)
+        # is (resting.x + 300, resting.y + 160), distances are measured
+        # from each window edge.
+
+        # Hugs the left edge: cx is the smallest component.
+        assert menu._pick_slide_edge((10, 200)) is Direction.W
+        # Hugs the right edge.
+        assert menu._pick_slide_edge((670, 200)) is Direction.E
+        # Hugs the top edge.
+        assert menu._pick_slide_edge((300, 10)) is Direction.N
+        # Hugs the bottom edge.
+        assert menu._pick_slide_edge((300, 400)) is Direction.S
     finally:
         pygame.quit()

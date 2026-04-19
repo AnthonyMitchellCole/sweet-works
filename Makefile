@@ -2,7 +2,7 @@
 
 PY ?= python
 
-.PHONY: help install run test bench perf lint format
+.PHONY: help install run test bench perf lint format sprites
 
 help:
 	@echo "Targets:"
@@ -13,6 +13,7 @@ help:
 	@echo "  perf      Run pytest-benchmark perf gates."
 	@echo "  lint      Run ruff."
 	@echo "  format    Autoformat with ruff."
+	@echo "  sprites   Regenerate the procedural sprite cache (forces overwrite)."
 
 install:
 	$(PY) -m pip install -r requirements.txt
@@ -34,3 +35,6 @@ lint:
 
 format:
 	$(PY) -m ruff format src bench tests
+
+sprites:
+	$(PY) -m src.assets.sprites --force
