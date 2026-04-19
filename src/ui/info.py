@@ -19,6 +19,7 @@ from ..buildings.port import Port, PortKind
 from ..core import config
 from ..items.item_type import ItemType
 from ..world.direction import Direction
+from ..world.tile import Coord
 
 if TYPE_CHECKING:
     from ..belts.network_soa import BeltNetworkSoA
@@ -66,6 +67,8 @@ class PortInfo:
     item: ItemType | None
     count: int
     capacity: int
+    cell_offset: Coord = (0, 0)
+    index: int = 0
 
     @property
     def fill(self) -> float:
@@ -97,6 +100,8 @@ class StructureInfo:
     subtitle: str
     accent: tuple[int, int, int]
     primary_item: ItemType | None = None
+    footprint: tuple[int, int] = (1, 1)
+    rotation: Direction = Direction.E
     rate_rows: tuple[InfoRow, ...] = ()
     port_rows: tuple[PortInfo, ...] = ()
     progress: float | None = None
@@ -109,19 +114,47 @@ class StructureInfo:
 # ---------------------------------------------------------------------------
 
 
-def _port_info(port: Port, fallback_item: ItemType | None = None) -> PortInfo:
+def _port_info(
+    port: Port,
+    *,
+    origin: Coord,
+    index: int,
+    fallback_item: ItemType | None = None,
+) -> PortInfo:
     item = port.filter if port.filter is not None else fallback_item
+    ox, oy = origin
+    cx, cy = port.cell
     return PortInfo(
         kind=port.kind,
         side=port.side,
         item=item,
         count=int(port.count),
         capacity=int(port.capacity),
+        cell_offset=(cx - ox, cy - oy),
+        index=index,
     )
 
 
 def _direction_word(d: Direction) -> str:
     return _DIR_NAME.get(d, str(d.name))
+
+
+def _enumerate_ports(
+    origin: Coord,
+    inputs: tuple[Port, ...] | list[Port],
+    outputs: tuple[Port, ...] | list[Port],
+    *,
+    fallback_item: ItemType | None = None,
+) -> tuple[PortInfo, ...]:
+    rows: list[PortInfo] = []
+    idx = 0
+    for p in inputs:
+        rows.append(_port_info(p, origin=origin, index=idx, fallback_item=fallback_item))
+        idx += 1
+    for p in outputs:
+        rows.append(_port_info(p, origin=origin, index=idx, fallback_item=fallback_item))
+        idx += 1
+    return tuple(rows)
 
 
 def for_miner(m: Miner) -> StructureInfo:
@@ -134,7 +167,9 @@ def for_miner(m: Miner) -> StructureInfo:
     )
     # Miner output ports are unfiltered -- surface the mined item so the
     # port bar in the menu can still colour it correctly.
-    port_rows = tuple(_port_info(p, fallback_item=m.item) for p in m.outputs)
+    port_rows = _enumerate_ports(
+        m.origin, m.inputs, m.outputs, fallback_item=m.item
+    )
     tooltip_rows = (
         InfoRow(label="Produces", value=m.item.name, item=m.item),
         InfoRow(label="Rate", value=_fmt_rate(rate), item=m.item),
@@ -145,6 +180,8 @@ def for_miner(m: Miner) -> StructureInfo:
         subtitle=subtitle,
         accent=m.item.color,
         primary_item=m.item,
+        footprint=m.footprint,
+        rotation=m.rotation,
         rate_rows=rate_rows,
         port_rows=port_rows,
         progress=None,
@@ -177,9 +214,7 @@ def for_assembler(a: Assembler) -> StructureInfo:
             )
         )
 
-    port_rows = tuple(_port_info(p) for p in a.inputs) + tuple(
-        _port_info(p) for p in a.outputs
-    )
+    port_rows = _enumerate_ports(a.origin, a.inputs, a.outputs)
 
     if a.is_crafting:
         done, total = a.craft_ticks
@@ -214,6 +249,8 @@ def for_assembler(a: Assembler) -> StructureInfo:
         subtitle=subtitle,
         accent=(primary_out.color if primary_out is not None else (245, 165, 36)),
         primary_item=primary_out,
+        footprint=a.footprint,
+        rotation=a.rotation,
         rate_rows=tuple(rate_rows),
         port_rows=port_rows,
         progress=progress,
@@ -254,6 +291,8 @@ def for_belt(b: ConveyorBelt, net: BeltNetworkSoA | None) -> StructureInfo:
         subtitle=subtitle,
         accent=(77, 163, 255),  # PALETTE.secondary
         primary_item=None,
+        footprint=(1, 1),
+        rotation=b.direction,
         rate_rows=tuple(rate_rows),
         port_rows=(),
         progress=None,

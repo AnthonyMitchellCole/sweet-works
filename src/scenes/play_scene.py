@@ -408,19 +408,30 @@ class PlayScene(Scene):
     def _render_hover_brackets(self, surface: pygame.Surface) -> None:
         assert self.world is not None
         assert self.camera is not None
-        if self._hover_origin is None and self._hover_strength.value <= 0.01:
-            return
         origin = self._hover_origin
-        if origin is None:
-            return
-        draw_hover_brackets(
-            surface,
-            self.camera,
-            origin,
-            self._hover_footprint,
-            time=self.world.time,
-            strength=self._hover_strength.value,
-        )
+        if origin is not None and self._hover_strength.value > 0.01:
+            draw_hover_brackets(
+                surface,
+                self.camera,
+                origin,
+                self._hover_footprint,
+                time=self.world.time,
+                strength=self._hover_strength.value,
+            )
+
+        # Menu-originated highlight (hovering a port in the structure menu).
+        if self.menu is not None:
+            h = self.menu.world_highlight()
+            if h is not None:
+                draw_hover_brackets(
+                    surface,
+                    self.camera,
+                    h.cell,
+                    h.footprint,
+                    time=self.world.time,
+                    strength=1.0,
+                    color=h.accent,
+                )
 
     def _on_lmb(self, tile_pos: tuple[int, int], is_pointer: bool) -> None:
         assert self.world is not None
