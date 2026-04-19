@@ -91,7 +91,14 @@ class World:
     # -- simulation --------------------------------------------------------
 
     def tick(self) -> None:
-        """One fixed step: buildings produce -> belts propagate."""
+        """One fixed step: flush belt edits -> buildings produce -> belts propagate.
+
+        Flushing first lets buildings deposit onto belts that were placed
+        earlier the same frame. The rebuild preserves items already on the
+        belt so there is no visual reset on edits.
+        """
+        if self.belt_network is not None:
+            self.belt_network.flush(self)
         for b in self.buildings:
             b.tick(self)
         if self.belt_network is not None:

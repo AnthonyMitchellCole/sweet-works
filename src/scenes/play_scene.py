@@ -22,6 +22,7 @@ from ..ui.cursor import PlacementCursor
 from ..ui.hover_highlight import draw_hover_brackets
 from ..ui.hud import HUD
 from ..ui.perf_hud import PerfHUD
+from ..ui.placement_fx import PlacementFx
 from ..ui.sprite_studio import SpriteStudio
 from ..ui.structure_menu import StructureMenu
 from ..ui.toolbar import Toolbar, ToolSlot
@@ -56,6 +57,7 @@ class PlayScene(Scene):
         self.tooltip: WorldTooltip | None = None
         self.menu: StructureMenu | None = None
         self.studio: SpriteStudio | None = None
+        self.fx: PlacementFx | None = None
 
         # Hover state and fade
         self._hover_building: Building | None = None
@@ -93,6 +95,7 @@ class PlayScene(Scene):
         self.menu.layout(window_size)
         self.studio = SpriteStudio(self.game.assets)
         self.studio.layout(window_size)
+        self.fx = PlacementFx()
 
         self.camera.set_center(6 * config.TILE, 4 * config.TILE)
 
@@ -174,10 +177,11 @@ class PlayScene(Scene):
         self.cursor.set_tool(self.toolbar.selected_slot())
 
         tile_pos = self.camera.screen_to_tile(*mouse_pos)
-        self.cursor.update(dt, tile_pos)
 
         tool = self.toolbar.selected_slot()
         is_pointer = tool.id == "pointer"
+        is_valid = is_pointer or self._footprint_is_free(tile_pos)
+        self.cursor.update(dt, tile_pos, is_valid=is_valid)
         mods = pygame.key.get_mods()
         alt_held = bool(mods & pygame.KMOD_ALT)
 
@@ -228,7 +232,7 @@ class PlayScene(Scene):
             if self.game.input.mouse_pressed(1):
                 self._on_lmb(tile_pos, is_pointer)
             if self.game.input.mouse_pressed(3) and not is_pointer:
-                self.world.remove_at(tile_pos)
+                self._on_rmb(tile_pos)
 
         for _ in range(sim_ticks):
             with timed(PERF.tick):
@@ -255,6 +259,9 @@ class PlayScene(Scene):
         self.renderer.draw_world(
             surface, self.world, self.camera, self.world.time, self.game.clock.sim_alpha
         )
+
+        if self.fx is not None:
+            self.fx.render(surface, self.camera, self.world.time)
 
         self._render_hover_brackets(surface)
 
@@ -384,6 +391,21 @@ class PlayScene(Scene):
         if self.cursor is not None:
             self.cursor.set_tool(slot)
 
+    def _footprint_is_free(self, origin: tuple[int, int]) -> bool:
+        """True when the full footprint of the currently selected tool is free."""
+        if self.world is None or self.cursor is None or self.cursor.tool is None:
+            return False
+        slot = self.cursor.tool
+        if slot.id == "pointer":
+            return True
+        fw, fh = self.cursor.footprint()
+        ox, oy = origin
+        for dy in range(fh):
+            for dx in range(fw):
+                if not self.world.is_free((ox + dx, oy + dy)):
+                    return False
+        return True
+
     def _point_over_ui(self, pos: tuple[int, int]) -> bool:
         if self.toolbar is None:
             return False
@@ -500,13 +522,33 @@ class PlayScene(Scene):
         if slot.id == "belt":
             if self.world.is_free(tile_pos):
                 belt = ConveyorBelt(tile_pos, self.cursor.rotation)
-                self.world.place_tile(belt)
+                if self.world.place_tile(belt) and self.fx is not None:
+                    self.fx.spawn_place(
+                        tile_pos, (1, 1), self.world.time, PALETTE.primary
+                    )
             return
         prefab: BuildingPrefab | None = slot.prefab
         if prefab is None:
             return
         building = prefab.factory(tile_pos, self.cursor.rotation)
-        self.world.place_building(building)
+        if self.world.place_building(building) and self.fx is not None:
+            self.fx.spawn_place(
+                building.origin, building.footprint, self.world.time, PALETTE.secondary
+            )
+
+    def _on_rmb(self, tile_pos: tuple[int, int]) -> None:
+        """RMB: delete belt or building under cursor with a dissolve flourish."""
+        assert self.world is not None
+        # Peek first so we can spawn an FX with the right footprint/color.
+        building = self.world.building_at(tile_pos)
+        tile = self.world.tile_at(tile_pos)
+        if self.world.remove_at(tile_pos) and self.fx is not None:
+            if building is not None:
+                self.fx.spawn_remove(
+                    building.origin, building.footprint, self.world.time
+                )
+            elif isinstance(tile, ConveyorBelt):
+                self.fx.spawn_remove(tile.pos, (1, 1), self.world.time)
 
     def _render_hint(self, surface: pygame.Surface) -> None:
         assert self.game is not None

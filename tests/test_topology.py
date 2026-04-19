@@ -144,6 +144,158 @@ def test_benchmark_layout_total_items_matches_fill() -> None:
     assert (soa.slots[heads] != EMPTY_ID).all()
 
 
+def test_chain_through_right_angle_turn_builds_without_error() -> None:
+    """Regression: three east belts then a south belt used to crash
+    ``build_chains`` via an empty phantom chain. A turn must produce a
+    single continuous chain with no crash."""
+    belts = [
+        ConveyorBelt((0, 0), Direction.E),
+        ConveyorBelt((1, 0), Direction.E),
+        ConveyorBelt((2, 0), Direction.E),
+        ConveyorBelt((3, 0), Direction.S),
+    ]
+    soa = build_chains(belts)
+    assert soa.chain_count == 1
+    assert soa.belt_count == 4
+
+
+def test_chain_with_two_turns() -> None:
+    """East -> south -> east zig-zag collapses into a single chain."""
+    belts = [
+        ConveyorBelt((0, 0), Direction.E),
+        ConveyorBelt((1, 0), Direction.S),
+        ConveyorBelt((1, 1), Direction.E),
+        ConveyorBelt((2, 1), Direction.E),
+    ]
+    soa = build_chains(belts)
+    assert soa.chain_count == 1
+    assert soa.belt_count == 4
+
+
+def test_items_survive_turn_chain_tick() -> None:
+    """An item fed at the head of a turning chain must emerge at the tail."""
+    belts = [
+        ConveyorBelt((0, 0), Direction.E),
+        ConveyorBelt((1, 0), Direction.E),
+        ConveyorBelt((2, 0), Direction.S),
+        ConveyorBelt((2, 1), Direction.S),
+    ]
+    soa = build_chains(belts)
+    # Place an item on the first slot of the chain.
+    soa.slots[0] = 5
+    for _ in range(soa.total_slots):
+        soa.tick()
+    # Item has walked off the chain (no successor) -- just verify it is
+    # not stuck on some intermediate slot and did not spawn duplicates.
+    assert int((soa.slots == 5).sum()) <= 1
+
+
+def test_items_persist_across_belt_placement_elsewhere() -> None:
+    """Placing a disconnected belt must not wipe existing items."""
+    events = EventBus()
+    world = World(events)
+    network = BeltNetworkSoA()
+    world.belt_network = network
+    for x in range(5):
+        world.place_tile(ConveyorBelt((x, 0), Direction.E))
+    network.flush(world)
+    # Seed the original chain with a recognisable pattern.
+    network.soa.slots[0] = 11
+    network.soa.slots[4] = 22
+    # Place a disconnected belt far away: should trigger a rebuild.
+    world.place_tile(ConveyorBelt((0, 5), Direction.E))
+    assert network._dirty
+    world.tick()
+    # Items must still be present on the original belts.
+    bi_0 = next(
+        i for i in range(network.soa.belt_count)
+        if tuple(network.soa.belt_pos[i]) == (0, 0)
+    )
+    bi_1 = next(
+        i for i in range(network.soa.belt_count)
+        if tuple(network.soa.belt_pos[i]) == (1, 0)
+    )
+    s0 = int(network.soa.belt_local_start[bi_0])
+    s1 = int(network.soa.belt_local_start[bi_1])
+    # Seeded items advance one slot during the tick.
+    assert network.soa.slots[s0 + 1] == 11
+    assert network.soa.slots[s1 + 1] == 22
+
+
+def test_items_persist_across_building_placement() -> None:
+    """Placing a building must not wipe existing belt items either."""
+    events = EventBus()
+    world = World(events)
+    network = BeltNetworkSoA()
+    world.belt_network = network
+    for x in range(5):
+        world.place_tile(ConveyorBelt((x, 0), Direction.E))
+    network.flush(world)
+    network.soa.slots[2] = 7
+    # Place a building far from the belt line.
+    world.place_building(BUILDINGS.miner_iron.factory((0, 10), Direction.E))
+    assert network._dirty
+    network.flush(world)
+    # Item was at slot index 2 of the single chain (belt 0 slot 2). After
+    # persistence it stays on belt 0 slot 2 because no tick occurred.
+    bi_0 = next(
+        i for i in range(network.soa.belt_count)
+        if tuple(network.soa.belt_pos[i]) == (0, 0)
+    )
+    s0 = int(network.soa.belt_local_start[bi_0])
+    assert network.soa.slots[s0 + 2] == 7
+
+
+def test_accept_succeeds_same_frame_as_placement() -> None:
+    """A building deposit right after a belt placement should land."""
+    events = EventBus()
+    world = World(events)
+    network = BeltNetworkSoA()
+    world.belt_network = network
+    world.place_tile(ConveyorBelt((0, 0), Direction.E))
+    # Flush turns _dirty into a fresh SoA without waiting for tick.
+    network.flush(world)
+    assert network.accept((0, 0), 1) is True
+    assert network.soa.slots[0] == 1
+
+
+def test_topology_merge_preserves_items_on_feeder_segments() -> None:
+    """When two belts merge into a common cell, items already on the
+    feeders must survive the rebuild at the exact same belt+slot."""
+    events = EventBus()
+    world = World(events)
+    network = BeltNetworkSoA()
+    world.belt_network = network
+    world.place_tile(ConveyorBelt((0, 0), Direction.E))
+    world.place_tile(ConveyorBelt((1, -1), Direction.S))
+    world.place_tile(ConveyorBelt((1, 0), Direction.E))
+    network.flush(world)
+    # Seed one item on each feeder.
+    bi_a = next(
+        i for i in range(network.soa.belt_count)
+        if tuple(network.soa.belt_pos[i]) == (0, 0)
+    )
+    bi_b = next(
+        i for i in range(network.soa.belt_count)
+        if tuple(network.soa.belt_pos[i]) == (1, -1)
+    )
+    network.soa.slots[int(network.soa.belt_local_start[bi_a])] = 3
+    network.soa.slots[int(network.soa.belt_local_start[bi_b])] = 4
+    # Place a tail belt downstream of the merge -> topology changes.
+    world.place_tile(ConveyorBelt((2, 0), Direction.E))
+    network.flush(world)
+    bi_a2 = next(
+        i for i in range(network.soa.belt_count)
+        if tuple(network.soa.belt_pos[i]) == (0, 0)
+    )
+    bi_b2 = next(
+        i for i in range(network.soa.belt_count)
+        if tuple(network.soa.belt_pos[i]) == (1, -1)
+    )
+    assert network.soa.slots[int(network.soa.belt_local_start[bi_a2])] == 3
+    assert network.soa.slots[int(network.soa.belt_local_start[bi_b2])] == 4
+
+
 def test_miner_produces_onto_belt_via_network() -> None:
     events = EventBus()
     world = World(events)

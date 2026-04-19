@@ -36,11 +36,6 @@ def _step(pos: tuple[int, int], d: Direction) -> tuple[int, int]:
     return (pos[0] + dx, pos[1] + dy)
 
 
-def _inv_step(pos: tuple[int, int], d: Direction) -> tuple[int, int]:
-    dx, dy = d.opposite.vector
-    return (pos[0] + dx, pos[1] + dy)
-
-
 def build_chains(belts: Iterable[ConveyorBelt], world: World | None = None) -> BeltChainsSoA:
     """Build a ``BeltChainsSoA`` from an iterable of ``ConveyorBelt`` tiles.
 
@@ -76,17 +71,15 @@ def build_chains(belts: Iterable[ConveyorBelt], world: World | None = None) -> B
     merge_targets = {p for p, n in upstream_count.items() if n >= 2}
 
     # -- 2. Find chain heads ------------------------------------------------
-    heads: list[tuple[int, int]] = []
-    for pos in belts_by_pos:
-        upstream_pos = _inv_step(pos, belts_by_pos[pos].direction)
-        upstream_belt = belts_by_pos.get(upstream_pos)
-        is_head = (
-            upstream_belt is None
-            or pos in merge_targets
-            or succ_of.get(upstream_pos) != pos
-        )
-        if is_head:
-            heads.append(pos)
+    # A belt starts a new chain iff it has no feeder (upstream_count == 0) or
+    # is a merge target (>= 2 feeders). Using ``upstream_count`` directly is
+    # the single source of truth: it already accounts for feeders arriving
+    # from *any* direction (e.g. an east belt feeding a south belt at a
+    # right-angle turn), which a directional ``_inv_step`` probe would miss.
+    heads: list[tuple[int, int]] = [
+        pos for pos in belts_by_pos
+        if upstream_count[pos] == 0 or upstream_count[pos] >= 2
+    ]
 
     # -- 3. Walk chains from heads -----------------------------------------
     # Each chain collects its belts in order (head -> tail).
@@ -108,7 +101,11 @@ def build_chains(belts: Iterable[ConveyorBelt], world: World | None = None) -> B
             if nxt in merge_targets:
                 break  # downstream belt starts its own chain
             cur = nxt
-        chains.append(chain)
+        # Defensive: never store an empty chain. An empty list can only arise
+        # if a future refactor produces phantom heads; downstream code assumes
+        # ``chain[-1]`` is valid.
+        if chain:
+            chains.append(chain)
 
     # Any belt that wasn't picked up as a chain head (shouldn't happen but
     # belts in cycles would fall through): assign each orphan its own chain.

@@ -1,11 +1,10 @@
 """Chunk-based world background renderer.
 
-Floor tiles and the static (non-animated) belt base are baked into a
-``Surface`` per chunk, per zoom bin. Drawing the world background then
-reduces to one ``blit`` per visible chunk instead of one blit per tile.
-
-Animated belt chevrons are re-blitted on top per frame (belt sprites are
-already pre-rotated and zoom-cached by :class:`ScaledSpriteCache`).
+Floor tiles are baked into a ``Surface`` per chunk, per zoom bin, and one
+``blit`` per visible chunk draws the background. Belts are drawn entirely
+by the animated batch in :mod:`src.belts.belt_renderer` so there is a
+single visual source of truth per belt (no stale frame-0 sprite shows
+through on rotate/remove).
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ from typing import TYPE_CHECKING
 
 import pygame
 
-from ..belts.belt import ConveyorBelt
 from ..core import config
 from ..world.grid import chunk_of
 from .sprite_cache import zoom_bin
@@ -24,9 +22,6 @@ if TYPE_CHECKING:
     from ..assets.loader import AssetLoader
     from ..world.camera import Camera
     from ..world.world import World
-
-
-_DIR_CODE_TO_STR = {0: "E", 1: "N", 2: "W", 3: "S"}
 
 
 def _chunk_world_rect(chunk: tuple[int, int]) -> tuple[int, int, int, int]:
@@ -125,17 +120,10 @@ class ChunkRenderer:
         for dy in range(cs):
             for dx in range(cs):
                 surf.blit(floor, (dx * tile_px, dy * tile_px))
-
-        cx, cy = chunk
-        origin_tx = cx * cs
-        origin_ty = cy * cs
-        grid = world.grid
-        for ty in range(origin_ty, origin_ty + cs):
-            for tx in range(origin_tx, origin_tx + cs):
-                tile = grid.get((tx, ty))
-                if isinstance(tile, ConveyorBelt):
-                    belt_sprite = assets.belt_scaled(tile.direction.value, 0, zoom)
-                    surf.blit(belt_sprite, ((tx - origin_tx) * tile_px, (ty - origin_ty) * tile_px))
+        # Belts are drawn by the animated batch in ``belt_renderer`` -- see
+        # module docstring. Chunks stay floor-only so rotations/removals
+        # are instantly reflected without waiting for a chunk re-bake.
+        _ = world  # kept in the signature for future tile types baked here.
         return surf
 
 
