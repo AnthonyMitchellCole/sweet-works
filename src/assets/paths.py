@@ -23,19 +23,19 @@ def sprites_dir() -> Path:
 
 
 FONT_FILES: dict[str, str] = {
-    "PressStart2P": "PressStart2P-Regular.ttf",
-    "PixelifySans": "PixelifySans.ttf",
+    "Silkscreen": "Silkscreen-Regular.ttf",
+    "Jersey10": "Jersey10-Regular.ttf",
 }
 
 
 FONT_URLS: dict[str, str] = {
-    "PressStart2P-Regular.ttf": (
+    "Silkscreen-Regular.ttf": (
         "https://raw.githubusercontent.com/google/fonts/main/"
-        "ofl/pressstart2p/PressStart2P-Regular.ttf"
+        "ofl/silkscreen/Silkscreen-Regular.ttf"
     ),
-    "PixelifySans.ttf": (
+    "Jersey10-Regular.ttf": (
         "https://raw.githubusercontent.com/google/fonts/main/"
-        "ofl/pixelifysans/PixelifySans%5Bwght%5D.ttf"
+        "ofl/jersey10/Jersey10-Regular.ttf"
     ),
 }
 

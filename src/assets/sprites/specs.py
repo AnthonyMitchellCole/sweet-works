@@ -17,8 +17,15 @@ from ...items.registry import ITEMS
 
 
 # Pictogram vocabulary understood by ``structure.render_structure``.
-PICTOGRAMS: tuple[str, ...] = ("ore_chunks", "coal_lumps", "plate_stack", "pinion")
-OVERLAY_KINDS: tuple[str, ...] = ("none", "drill", "glow")
+PICTOGRAMS: tuple[str, ...] = (
+    "cocoa_beans",
+    "sugar_crystals",
+    "milk_drops",
+    "chocolate_stack",
+    "caramel_swirl",
+    "candy_swirl",
+)
+OVERLAY_KINDS: tuple[str, ...] = ("none", "auger", "steam", "glow")
 SIDES: tuple[str, ...] = ("N", "E", "S", "W")
 
 
@@ -39,7 +46,7 @@ class AccentStripeSpec:
 
 @dataclass(frozen=True)
 class BadgeSpec:
-    pictogram: str = "ore_chunks"
+    pictogram: str = "cocoa_beans"
     size_at_64: int = 20
     tint: Color = PALETTE.muted
 
@@ -69,78 +76,101 @@ class StructureSpec:
 
 
 # ---------------------------------------------------------------------------
-# Default spec set — seeded from the item registry so colours stay in sync.
+# Default spec set - seeded from the item registry so colours stay in sync.
 # ---------------------------------------------------------------------------
 
 
-def _iron() -> StructureSpec:
-    c = ITEMS.iron.color
+def _extractor_cocoa() -> StructureSpec:
+    c = ITEMS.cocoa_bean.color
     return StructureSpec(
-        id="miner_iron",
+        id="extractor_cocoa",
         footprint=(1, 1),
         chassis=ChassisSpec(),
         accent=AccentStripeSpec(color=c, side="N", thickness=2),
-        badge=BadgeSpec(pictogram="ore_chunks", tint=c, size_at_64=22),
+        badge=BadgeSpec(pictogram="cocoa_beans", tint=c, size_at_64=22),
         lights=LightSpec(color=c, pattern=(1, 1, 0, 1, 0, 0), count=2),
-        overlay=OverlaySpec(kind="drill", size_at_64=18),
+        overlay=OverlaySpec(kind="auger", size_at_64=18),
     )
 
 
-def _copper() -> StructureSpec:
-    c = ITEMS.copper.color
+def _extractor_sugar() -> StructureSpec:
+    c = ITEMS.sugar_crystal.color
     return StructureSpec(
-        id="miner_copper",
+        id="extractor_sugar",
         footprint=(1, 1),
         chassis=ChassisSpec(),
         accent=AccentStripeSpec(color=c, side="N", thickness=2),
-        badge=BadgeSpec(pictogram="ore_chunks", tint=c, size_at_64=22),
+        badge=BadgeSpec(pictogram="sugar_crystals", tint=c, size_at_64=22),
         lights=LightSpec(color=c, pattern=(1, 0, 1, 0, 1, 0), count=2),
-        overlay=OverlaySpec(kind="drill", size_at_64=18),
+        overlay=OverlaySpec(kind="auger", size_at_64=18),
     )
 
 
-def _coal() -> StructureSpec:
-    c = ITEMS.coal.color
-    accent = PALETTE.warning
+def _well_milk() -> StructureSpec:
+    c = ITEMS.milk.color
+    accent = PALETTE.secondary
     return StructureSpec(
-        id="miner_coal",
+        id="well_milk",
         footprint=(1, 1),
         chassis=ChassisSpec(),
         accent=AccentStripeSpec(color=accent, side="N", thickness=2),
-        badge=BadgeSpec(pictogram="coal_lumps", tint=c, size_at_64=22),
+        badge=BadgeSpec(pictogram="milk_drops", tint=c, size_at_64=22),
         lights=LightSpec(color=accent, pattern=(1, 0, 0, 1, 0, 0), count=2),
-        overlay=OverlaySpec(kind="drill", size_at_64=18),
+        overlay=OverlaySpec(kind="auger", size_at_64=18),
     )
 
 
-def _plate() -> StructureSpec:
-    c = ITEMS.plate.color
+def _mixer_chocolate() -> StructureSpec:
+    c = ITEMS.chocolate.color
     return StructureSpec(
-        id="assembler_plate",
+        id="mixer_chocolate",
         footprint=(2, 2),
         chassis=ChassisSpec(bolts=8),
         accent=AccentStripeSpec(color=c, side="N", thickness=2),
-        badge=BadgeSpec(pictogram="plate_stack", tint=c, size_at_64=28),
-        lights=LightSpec(color=PALETTE.secondary, pattern=(1, 0, 0, 0, 1, 1), count=3),
-        overlay=OverlaySpec(kind="glow", size_at_64=44),
+        badge=BadgeSpec(pictogram="chocolate_stack", tint=c, size_at_64=28),
+        lights=LightSpec(color=PALETTE.primary, pattern=(1, 0, 0, 0, 1, 1), count=3),
+        overlay=OverlaySpec(kind="steam", size_at_64=48),
     )
 
 
-def _gear() -> StructureSpec:
-    c = ITEMS.gear.color
+def _pot_caramel() -> StructureSpec:
+    c = ITEMS.caramel.color
     return StructureSpec(
-        id="assembler_gear",
+        id="pot_caramel",
         footprint=(2, 2),
         chassis=ChassisSpec(bolts=8),
         accent=AccentStripeSpec(color=c, side="N", thickness=2),
-        badge=BadgeSpec(pictogram="pinion", tint=c, size_at_64=30),
-        lights=LightSpec(color=PALETTE.warning, pattern=(1, 1, 0, 1, 0, 1), count=3),
+        badge=BadgeSpec(pictogram="caramel_swirl", tint=c, size_at_64=28),
+        lights=LightSpec(color=PALETTE.warning, pattern=(1, 1, 0, 0, 1, 0), count=3),
+        overlay=OverlaySpec(kind="steam", size_at_64=48),
+    )
+
+
+def _wrapper_candy() -> StructureSpec:
+    c = ITEMS.candy_bar.color
+    return StructureSpec(
+        id="wrapper_candy",
+        footprint=(2, 2),
+        chassis=ChassisSpec(bolts=8),
+        accent=AccentStripeSpec(color=c, side="N", thickness=2),
+        badge=BadgeSpec(pictogram="candy_swirl", tint=c, size_at_64=30),
+        lights=LightSpec(color=PALETTE.primary, pattern=(1, 1, 0, 1, 0, 1), count=3),
         overlay=OverlaySpec(kind="glow", size_at_64=48),
     )
 
 
 def _default_specs() -> dict[str, StructureSpec]:
-    return {s.id: s for s in (_iron(), _copper(), _coal(), _plate(), _gear())}
+    return {
+        s.id: s
+        for s in (
+            _extractor_cocoa(),
+            _extractor_sugar(),
+            _well_milk(),
+            _mixer_chocolate(),
+            _pot_caramel(),
+            _wrapper_candy(),
+        )
+    }
 
 
 STRUCTURE_SPECS: dict[str, StructureSpec] = _default_specs()
@@ -171,7 +201,7 @@ def apply_overrides(overrides: dict[str, Any]) -> None:
     Schema::
 
         {
-            "miner_iron": {
+            "extractor_cocoa": {
                 "accent": {"side": "E", "thickness": 3},
                 "lights": {"pattern": [1, 1, 0]},
                 "badge":  {"size_at_64": 22},

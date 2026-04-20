@@ -327,7 +327,7 @@ def run(argv: list[str] | None = None) -> BenchResult:
 def _print_human(r: BenchResult) -> None:
     status = "PASS" if r.passed else "FAIL"
     print("=" * 72)
-    print(f" fac-py bench                                                   [{status}] ")
+    print(f" sweet-works bench                                              [{status}] ")
     print("=" * 72)
     print(f"  layout       : {r.chains:,} chains x {r.belts_per_chain} belts")
     print(f"  items        : {r.items:,}")

@@ -26,14 +26,22 @@ def _with_id(base: ItemType, type_id: int) -> ItemType:
 
 @dataclass(frozen=True)
 class ItemRegistry:
-    iron: ItemType
-    copper: ItemType
-    coal: ItemType
-    plate: ItemType
-    gear: ItemType
+    cocoa_bean: ItemType
+    sugar_crystal: ItemType
+    milk: ItemType
+    chocolate: ItemType
+    caramel: ItemType
+    candy_bar: ItemType
 
     def all(self) -> tuple[ItemType, ...]:
-        return (self.iron, self.copper, self.coal, self.plate, self.gear)
+        return (
+            self.cocoa_bean,
+            self.sugar_crystal,
+            self.milk,
+            self.chocolate,
+            self.caramel,
+            self.candy_bar,
+        )
 
     def by_id(self, item_id: str) -> ItemType:
         found = _BY_STR.get(item_id)
@@ -48,11 +56,12 @@ class ItemRegistry:
 
 
 _BASE_ITEMS: tuple[ItemType, ...] = (
-    ItemType("iron", "Iron Ore", PALETTE.iron, "item_iron"),
-    ItemType("copper", "Copper Ore", PALETTE.copper, "item_copper"),
-    ItemType("coal", "Coal", PALETTE.coal, "item_coal"),
-    ItemType("plate", "Iron Plate", PALETTE.plate, "item_plate"),
-    ItemType("gear", "Iron Gear", PALETTE.gear, "item_gear"),
+    ItemType("cocoa_bean", "Cocoa Bean", PALETTE.cocoa_bean, "item_cocoa_bean"),
+    ItemType("sugar_crystal", "Sugar Crystal", PALETTE.sugar_crystal, "item_sugar_crystal"),
+    ItemType("milk", "Milk", PALETTE.milk, "item_milk"),
+    ItemType("chocolate", "Chocolate Bar", PALETTE.chocolate, "item_chocolate"),
+    ItemType("caramel", "Caramel", PALETTE.caramel, "item_caramel"),
+    ItemType("candy_bar", "Candy Bar", PALETTE.candy_bar, "item_candy_bar"),
 )
 
 # Assign stable type_ids: slot 0 reserved for EMPTY, real types start at 1.
@@ -61,11 +70,12 @@ _WITH_IDS: tuple[ItemType, ...] = tuple(
 )
 
 ITEMS = ItemRegistry(
-    iron=_WITH_IDS[0],
-    copper=_WITH_IDS[1],
-    coal=_WITH_IDS[2],
-    plate=_WITH_IDS[3],
-    gear=_WITH_IDS[4],
+    cocoa_bean=_WITH_IDS[0],
+    sugar_crystal=_WITH_IDS[1],
+    milk=_WITH_IDS[2],
+    chocolate=_WITH_IDS[3],
+    caramel=_WITH_IDS[4],
+    candy_bar=_WITH_IDS[5],
 )
 
 # O(1) lookup by type_id. Index 0 = None (empty).

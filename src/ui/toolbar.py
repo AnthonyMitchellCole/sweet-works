@@ -39,10 +39,42 @@ def default_slots() -> tuple[ToolSlot, ...]:
     return (
         ToolSlot(id="pointer", label="Inspect", hotkey=pygame.K_q, prefab=None),
         ToolSlot(id="belt", label="Conveyor", hotkey=pygame.K_1, prefab=None),
-        ToolSlot(id="miner_iron", label="Iron Miner", hotkey=pygame.K_2, prefab=BUILDINGS.miner_iron),
-        ToolSlot(id="miner_copper", label="Copper Miner", hotkey=pygame.K_3, prefab=BUILDINGS.miner_copper),
-        ToolSlot(id="assembler_plate", label="Plate Assembler", hotkey=pygame.K_4, prefab=BUILDINGS.assembler_plate),
-        ToolSlot(id="assembler_gear", label="Gear Assembler", hotkey=pygame.K_5, prefab=BUILDINGS.assembler_gear),
+        ToolSlot(
+            id="extractor_cocoa",
+            label="Cocoa Extractor",
+            hotkey=pygame.K_2,
+            prefab=BUILDINGS.extractor_cocoa,
+        ),
+        ToolSlot(
+            id="extractor_sugar",
+            label="Sugar Extractor",
+            hotkey=pygame.K_3,
+            prefab=BUILDINGS.extractor_sugar,
+        ),
+        ToolSlot(
+            id="well_milk",
+            label="Milk Well",
+            hotkey=pygame.K_4,
+            prefab=BUILDINGS.well_milk,
+        ),
+        ToolSlot(
+            id="mixer_chocolate",
+            label="Chocolate Mixer",
+            hotkey=pygame.K_5,
+            prefab=BUILDINGS.mixer_chocolate,
+        ),
+        ToolSlot(
+            id="pot_caramel",
+            label="Caramel Pot",
+            hotkey=pygame.K_6,
+            prefab=BUILDINGS.pot_caramel,
+        ),
+        ToolSlot(
+            id="wrapper_candy",
+            label="Candy Wrapper",
+            hotkey=pygame.K_7,
+            prefab=BUILDINGS.wrapper_candy,
+        ),
     )
 
 

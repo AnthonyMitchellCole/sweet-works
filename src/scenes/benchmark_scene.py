@@ -81,7 +81,7 @@ class BenchmarkScene(Scene):
         self.hud = PerfHUD(self.game.assets)
         self.hud.visible = True
 
-        tid = ITEMS.iron.type_id
+        tid = ITEMS.cocoa_bean.type_id
         t0 = time.perf_counter()
         soa = build_benchmark(
             n_chains=self._chains,

@@ -22,10 +22,10 @@ def belt_east(frame: int) -> pygame.Surface:
     tile = config.TILE
     s = draw.new_surface((tile, tile))
 
-    base = darken(PALETTE.bg_raised, 0.15)
+    base = darken(PALETTE.surface, 0.15)
     mid = PALETTE.surface
-    hi = PALETTE.line
-    chev = lighten(PALETTE.secondary, 0.05)
+    hi = lighten(PALETTE.line, 0.05)
+    chev = lighten(PALETTE.primary, 0.05)
     bottom = PALETTE.bg_deep
 
     border = max(3, tile // 10)

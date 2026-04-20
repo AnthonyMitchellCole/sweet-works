@@ -8,6 +8,6 @@
   "fullscreen": false,
   "structure_anim_hz": 6.0,
   "tick_hz": 20,
-  "window_h": 1440,
-  "window_w": 2560
+  "window_h": 1080,
+  "window_w": 1920
 }

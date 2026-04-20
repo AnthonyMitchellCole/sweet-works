@@ -88,8 +88,8 @@ def test_successor_port_wires_tail_into_building_input() -> None:
     events = EventBus()
     world = World(events)
 
-    miner = BUILDINGS.miner_iron.factory((0, 0), Direction.E)
-    assembler = BUILDINGS.assembler_plate.factory((6, 0), Direction.E)
+    miner = BUILDINGS.extractor_cocoa.factory((0, 0), Direction.E)
+    assembler = BUILDINGS.mixer_chocolate.factory((6, 0), Direction.E)
     world.place_building(miner)
     world.place_building(assembler)
     for x in range(1, 6):
@@ -342,7 +342,7 @@ def test_items_persist_across_building_placement() -> None:
     network.flush(world)
     network.soa.slots[2] = 7
     # Place a building far from the belt line.
-    world.place_building(BUILDINGS.miner_iron.factory((0, 10), Direction.E))
+    world.place_building(BUILDINGS.extractor_cocoa.factory((0, 10), Direction.E))
     assert network._dirty
     network.flush(world)
     # Item was at slot index 2 of the single chain (belt 0 slot 2). After
@@ -411,21 +411,21 @@ def test_miner_produces_onto_belt_via_network() -> None:
     network = BeltNetworkSoA()
     world.belt_network = network
 
-    miner = BUILDINGS.miner_iron.factory((0, 0), Direction.E)
+    miner = BUILDINGS.extractor_cocoa.factory((0, 0), Direction.E)
     world.place_building(miner)
     world.place_tile(ConveyorBelt((1, 0), Direction.E))
     world.place_tile(ConveyorBelt((2, 0), Direction.E))
 
-    # Run enough ticks for the miner to produce. Miner rate is 2/s (see registry),
-    # we just need one successful deposit.
-    found_iron = False
-    iron_tid = ITEMS.iron.type_id
+    # Run enough ticks for the extractor to produce. Extractor rate is 2/s
+    # (see registry), we just need one successful deposit.
+    found_cocoa = False
+    cocoa_tid = ITEMS.cocoa_bean.type_id
     for _ in range(200):
         world.tick()
-        if int(np.count_nonzero(network.soa.slots == iron_tid)) > 0:
-            found_iron = True
+        if int(np.count_nonzero(network.soa.slots == cocoa_tid)) > 0:
+            found_cocoa = True
             break
-    assert found_iron, "miner should place an iron item on the belt eventually"
+    assert found_cocoa, "extractor should place a cocoa bean on the belt eventually"
 
 
 if __name__ == "__main__":

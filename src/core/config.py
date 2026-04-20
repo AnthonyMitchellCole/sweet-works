@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-TITLE: str = "fac-py"
+TITLE: str = "sweet-works"
 
 WINDOW_W: int = 1280
 WINDOW_H: int = 720

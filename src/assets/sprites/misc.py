@@ -13,7 +13,7 @@ def floor() -> pygame.Surface:
     tile = config.TILE
     s = draw.new_surface((tile, tile), alpha=False)
     s.fill(PALETTE.bg_base)
-    checker = darken(PALETTE.bg_base, 0.25)
+    checker = lighten(PALETTE.bg_base, 0.05)
     cell = max(4, tile // 6)
     for y in range(0, tile, cell):
         for x in range(0, tile, cell):
@@ -27,8 +27,8 @@ def floor() -> pygame.Surface:
 def ghost() -> pygame.Surface:
     tile = config.TILE
     s = draw.new_surface((tile, tile))
-    fill = with_alpha(PALETTE.secondary, 70)
-    outline = with_alpha(PALETTE.secondary, 200)
+    fill = with_alpha(PALETTE.primary, 70)
+    outline = with_alpha(PALETTE.primary, 200)
     pygame.draw.rect(s, fill, pygame.Rect(2, 2, tile - 4, tile - 4))
     for t in range(2):
         pygame.draw.rect(

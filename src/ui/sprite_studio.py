@@ -693,7 +693,7 @@ class SpriteStudio:
             new_pat = _cycle_pattern(spec.lights.pattern, delta)
             new_spec = replace(spec, lights=replace(spec.lights, pattern=new_pat))
         elif field_name == "overlay_kind":
-            kinds = ("none", "drill", "glow")
+            kinds = ("none", "auger", "steam", "glow")
             idx = kinds.index(spec.overlay.kind) if spec.overlay.kind in kinds else 0
             kind = kinds[(idx + delta) % len(kinds)]
             new_spec = replace(spec, overlay=replace(spec.overlay, kind=kind))

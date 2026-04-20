@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import random
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -49,6 +50,28 @@ class MenuScene(Scene):
         self._underline = AnimValue(value=0.0, target=1.0, speed=14.0)
         # Reveal stagger: each item's per-row tween driven by self._t after on_enter.
         self._reveal_t0: float = 0.0
+
+        # Falling-sprinkle particles. Each sprinkle has (x_norm, phase, hue_idx,
+        # rotation, speed). Positions are expressed as normalised floats so the
+        # layer survives window resizes without reshuffling.
+        rng = random.Random(0xCA11D1)
+        self._sprinkle_hues = (
+            PALETTE.primary,
+            PALETTE.secondary,
+            PALETTE.success,
+            PALETTE.warning,
+            PALETTE.sugar_crystal,
+        )
+        self._sprinkles: list[tuple[float, float, int, float, float]] = [
+            (
+                rng.random(),
+                rng.random(),
+                rng.randrange(len(self._sprinkle_hues)),
+                rng.uniform(0.0, math.pi * 2),
+                rng.uniform(14.0, 22.0),
+            )
+            for _ in range(14)
+        ]
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -179,14 +202,38 @@ class MenuScene(Scene):
         vline.fill(color)
         for x in range(0, w, step):
             surface.blit(vline, (x, 0))
+        self._render_sprinkles(surface)
+
+    def _render_sprinkles(self, surface: pygame.Surface) -> None:
+        w, h = surface.get_size()
+        for x_norm, phase, hue_idx, rot, speed in self._sprinkles:
+            # Vertical drift: phase + t*speed wraps [0, h + 20).
+            y = ((phase * (h + 20) + self._t * speed) % (h + 20)) - 10
+            # Gentle sinusoidal x jitter so they don't fall in straight lines.
+            jitter = math.sin(self._t * 0.8 + rot) * 8
+            x = x_norm * w + jitter
+            color = self._sprinkle_hues[hue_idx]
+            alpha = 70
+            angle = rot + self._t * 1.5
+            dx = math.cos(angle) * 3
+            dy = math.sin(angle) * 3
+            with acquired((7, 7)) as surf:
+                pygame.draw.line(
+                    surf,
+                    with_alpha(color, alpha),
+                    (int(round(3 - dx / 2)), int(round(3 - dy / 2))),
+                    (int(round(3 + dx / 2)), int(round(3 + dy / 2))),
+                    2,
+                )
+                surface.blit(surf, (int(x) - 3, int(y) - 3))
 
     def _render_title(self, surface: pygame.Surface) -> None:
         assert self.game is not None
         assets = self.game.assets
 
-        title = assets.render_text("FAC-PY", TYPE.display, PALETTE.text_strong)
+        title = assets.render_text("SWEET WORKS", TYPE.display, PALETTE.text_strong)
         sub = assets.render_text(
-            "Build. Connect. Automate.", TYPE.body, PALETTE.muted
+            "Extract. Mix. Wrap.", TYPE.body, PALETTE.muted
         )
         w, h = surface.get_size()
         cx = w // 2

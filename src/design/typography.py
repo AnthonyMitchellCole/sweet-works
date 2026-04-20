@@ -11,8 +11,8 @@ from enum import Enum
 
 
 class FontFamily(str, Enum):
-    DISPLAY = "PressStart2P"
-    UI = "PixelifySans"
+    DISPLAY = "Silkscreen"
+    UI = "Jersey10"
 
 
 class FontWeight(int, Enum):
@@ -34,11 +34,13 @@ class TextStyle:
 
 @dataclass(frozen=True)
 class TypeScale:
+    # Silkscreen is dense; UI (Jersey 10) renders a bit small so body/caption/label
+    # sizes are nudged up relative to the old Pixelify Sans defaults.
     display: TextStyle = TextStyle("display", FontFamily.DISPLAY, 28)
-    h1: TextStyle = TextStyle("h1", FontFamily.UI, 28, FontWeight.BOLD)
-    h2: TextStyle = TextStyle("h2", FontFamily.UI, 20, FontWeight.SEMIBOLD)
-    body: TextStyle = TextStyle("body", FontFamily.UI, 16, FontWeight.MEDIUM)
-    caption: TextStyle = TextStyle("caption", FontFamily.UI, 13, FontWeight.REGULAR)
+    h1: TextStyle = TextStyle("h1", FontFamily.UI, 32, FontWeight.BOLD)
+    h2: TextStyle = TextStyle("h2", FontFamily.UI, 24, FontWeight.SEMIBOLD)
+    body: TextStyle = TextStyle("body", FontFamily.UI, 20, FontWeight.MEDIUM)
+    caption: TextStyle = TextStyle("caption", FontFamily.UI, 16, FontWeight.REGULAR)
     mono: TextStyle = TextStyle("mono", FontFamily.DISPLAY, 12)
     label: TextStyle = TextStyle("label", FontFamily.DISPLAY, 10)
 

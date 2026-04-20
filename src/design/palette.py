@@ -1,4 +1,4 @@
-"""Industrial-dark color palette, exposed as a frozen dataclass singleton."""
+"""Warm confectionery dark palette, exposed as a frozen dataclass singleton."""
 
 from __future__ import annotations
 
@@ -35,33 +35,34 @@ def darken(c: Color, amount: float) -> Color:
 
 @dataclass(frozen=True)
 class Palette:
-    # Backgrounds
-    bg_deep: Color = _hex("#0E1014")
-    bg_base: Color = _hex("#161A22")
-    bg_raised: Color = _hex("#1F2530")
-    surface: Color = _hex("#2A3240")
+    # Backgrounds - warm cocoa-dark so pastel items pop.
+    bg_deep: Color = _hex("#1A120B")
+    bg_base: Color = _hex("#221914")
+    bg_raised: Color = _hex("#2E221B")
+    surface: Color = _hex("#3D2D22")
 
     # Lines and muted
-    line: Color = _hex("#394456")
-    muted: Color = _hex("#6B7689")
+    line: Color = _hex("#524030")
+    muted: Color = _hex("#A89786")
 
     # Text
-    text_body: Color = _hex("#B8C2D1")
-    text_strong: Color = _hex("#E8EDF5")
+    text_body: Color = _hex("#E8DBC3")
+    text_strong: Color = _hex("#FFF6E6")
 
     # Accents
-    primary: Color = _hex("#F5A524")
-    secondary: Color = _hex("#4DA3FF")
-    success: Color = _hex("#3DD68C")
-    danger: Color = _hex("#F26D6D")
-    warning: Color = _hex("#E8C547")
+    primary: Color = _hex("#F26DA5")   # candy pink
+    secondary: Color = _hex("#7ED6DF") # mint
+    success: Color = _hex("#A8D56B")   # pistachio
+    danger: Color = _hex("#F25C5C")    # strawberry
+    warning: Color = _hex("#F2C94C")   # banana
 
     # Items
-    iron: Color = _hex("#B8C2D1")
-    copper: Color = _hex("#E28447")
-    coal: Color = _hex("#2B2F36")
-    plate: Color = _hex("#9AA6B8")
-    gear: Color = _hex("#D9A441")
+    cocoa_bean: Color = _hex("#5C3317")
+    sugar_crystal: Color = _hex("#FFD1DC")
+    milk: Color = _hex("#F4ECDF")
+    chocolate: Color = _hex("#7A4A2B")
+    caramel: Color = _hex("#C98A3F")
+    candy_bar: Color = _hex("#E94E8F")
 
 
 PALETTE = Palette()

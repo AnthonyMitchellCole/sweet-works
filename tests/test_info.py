@@ -25,7 +25,7 @@ from src.world.direction import Direction
 
 
 def test_miner_ipm_matches_tick_math() -> None:
-    # Default miner prefabs use period_ticks=10 (iron/copper) and 12 (coal).
+    # Default extractor prefabs use period_ticks=10 (cocoa/sugar) and 12 (milk).
     assert info_mod.miner_ipm(10) == (60.0 * config.TICK_HZ) / 10
     assert info_mod.miner_ipm(12) == (60.0 * config.TICK_HZ) / 12
     # period_ticks is floored at 1.
@@ -47,12 +47,12 @@ def test_belt_max_ipm_is_one_slot_per_tick() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_for_miner_iron_reports_120_per_min() -> None:
-    miner = BUILDINGS.miner_iron.factory((0, 0), Direction.E)
+def test_for_extractor_cocoa_reports_120_per_min() -> None:
+    miner = BUILDINGS.extractor_cocoa.factory((0, 0), Direction.E)
     info = info_mod.for_miner(miner)
     assert info.kind == "miner"
-    assert info.primary_item is ITEMS.iron
-    # Iron miner prefab has period_ticks=10 -> exactly 120/min.
+    assert info.primary_item is ITEMS.cocoa_bean
+    # Cocoa extractor prefab has period_ticks=10 -> exactly 120/min.
     rate_labels = {row.label: row.value for row in info.rate_rows}
     assert "Output" in rate_labels
     assert "120/min" in rate_labels["Output"]
@@ -60,26 +60,26 @@ def test_for_miner_iron_reports_120_per_min() -> None:
     # A single output port.
     assert len(info.port_rows) == 1
     assert info.port_rows[0].kind is PortKind.OUTPUT
-    assert info.port_rows[0].item is ITEMS.iron
+    assert info.port_rows[0].item is ITEMS.cocoa_bean
 
 
-def test_for_miner_coal_reports_100_per_min() -> None:
-    miner = BUILDINGS.miner_coal.factory((0, 0), Direction.E)
+def test_for_well_milk_reports_100_per_min() -> None:
+    miner = BUILDINGS.well_milk.factory((0, 0), Direction.E)
     info = info_mod.for_miner(miner)
     rate_labels = {row.label: row.value for row in info.rate_rows}
     assert "100/min" in rate_labels["Output"]
 
 
-def test_for_assembler_plate_reports_60_iron_in_60_plate_out() -> None:
-    asm = BUILDINGS.assembler_plate.factory((0, 0), Direction.E)
+def test_for_mixer_chocolate_reports_60_cocoa_in_60_chocolate_out() -> None:
+    asm = BUILDINGS.mixer_chocolate.factory((0, 0), Direction.E)
     info = info_mod.for_assembler(asm)
     assert info.kind == "assembler"
-    assert info.primary_item is ITEMS.plate
+    assert info.primary_item is ITEMS.chocolate
     labels = [row.label for row in info.rate_rows]
-    assert any(lbl.startswith("In - Iron") for lbl in labels)
-    assert any(lbl.startswith("Out - Iron Plate") for lbl in labels)
+    assert any(lbl.startswith("In - Cocoa Bean") for lbl in labels)
+    assert any(lbl.startswith("Out - Chocolate Bar") for lbl in labels)
     values_by_label = {row.label: row.value for row in info.rate_rows}
-    # Plate recipe: 20 ticks, 1 iron -> 1 plate. cpm = 60, so 60/min each.
+    # Chocolate recipe: 20 ticks, 1 cocoa -> 1 chocolate. cpm = 60, so 60/min each.
     assert "60/min" in next(v for k, v in values_by_label.items() if k.startswith("In"))
     assert "60/min" in next(v for k, v in values_by_label.items() if k.startswith("Out"))
     # Port rows include both input and output.
@@ -90,15 +90,15 @@ def test_for_assembler_plate_reports_60_iron_in_60_plate_out() -> None:
     assert info.progress == 0.0
 
 
-def test_for_assembler_gear_reports_80_plate_in_40_gear_out() -> None:
-    asm = BUILDINGS.assembler_gear.factory((0, 0), Direction.E)
+def test_for_wrapper_candy_reports_40_per_min_each_side() -> None:
+    asm = BUILDINGS.wrapper_candy.factory((0, 0), Direction.E)
     info = info_mod.for_assembler(asm)
     values_by_label = {row.label: row.value for row in info.rate_rows}
-    in_val = next(v for k, v in values_by_label.items() if k.startswith("In"))
-    out_val = next(v for k, v in values_by_label.items() if k.startswith("Out"))
-    # Gear recipe: 30 ticks, 2 plate -> 1 gear. cpm = 40. in 80/min, out 40/min.
-    assert "80/min" in in_val
-    assert "40/min" in out_val
+    # Candy recipe: 30 ticks, 1 chocolate + 1 caramel -> 1 candy_bar. cpm = 40.
+    in_values = [v for k, v in values_by_label.items() if k.startswith("In")]
+    out_values = [v for k, v in values_by_label.items() if k.startswith("Out")]
+    assert all("40/min" in v for v in in_values)
+    assert any("40/min" in v for v in out_values)
 
 
 def test_for_belt_reports_max_lane_throughput() -> None:
@@ -112,14 +112,14 @@ def test_for_belt_reports_max_lane_throughput() -> None:
 
 
 def test_for_building_dispatches_by_type() -> None:
-    miner = BUILDINGS.miner_iron.factory((0, 0), Direction.E)
-    asm = BUILDINGS.assembler_plate.factory((2, 0), Direction.E)
+    miner = BUILDINGS.extractor_cocoa.factory((0, 0), Direction.E)
+    asm = BUILDINGS.mixer_chocolate.factory((2, 0), Direction.E)
     assert info_mod.for_building(miner).kind == "miner"
     assert info_mod.for_building(asm).kind == "assembler"
 
 
 def test_brief_returns_tooltip_rows() -> None:
-    miner = BUILDINGS.miner_iron.factory((0, 0), Direction.E)
+    miner = BUILDINGS.extractor_cocoa.factory((0, 0), Direction.E)
     info = info_mod.for_miner(miner)
     rows = info_mod.brief(info)
     assert rows is info.tooltip_rows
@@ -131,8 +131,8 @@ def test_brief_returns_tooltip_rows() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_for_miner_populates_footprint_and_rotation() -> None:
-    miner = BUILDINGS.miner_iron.factory((3, 5), Direction.E)
+def test_for_extractor_populates_footprint_and_rotation() -> None:
+    miner = BUILDINGS.extractor_cocoa.factory((3, 5), Direction.E)
     info = info_mod.for_miner(miner)
     assert info.footprint == (1, 1)
     assert info.rotation is Direction.E
@@ -140,28 +140,28 @@ def test_for_miner_populates_footprint_and_rotation() -> None:
     port = info.port_rows[0]
     assert port.cell_offset == (0, 0)
     assert port.index == 0
-    # Miner output port side always follows building rotation.
+    # Extractor output port side always follows building rotation.
     assert port.side is Direction.E
 
 
-def test_for_miner_port_side_rotates_with_building() -> None:
+def test_for_extractor_port_side_rotates_with_building() -> None:
     for rot in (Direction.N, Direction.E, Direction.S, Direction.W):
-        miner = BUILDINGS.miner_iron.factory((0, 0), rot)
+        miner = BUILDINGS.extractor_cocoa.factory((0, 0), rot)
         info = info_mod.for_miner(miner)
         assert info.rotation is rot
         assert info.port_rows[0].side is rot
         assert info.port_rows[0].cell_offset == (0, 0)
 
 
-def test_for_assembler_populates_footprint_and_port_layout() -> None:
-    asm = BUILDINGS.assembler_plate.factory((6, 3), Direction.E)
+def test_for_mixer_populates_footprint_and_port_layout() -> None:
+    asm = BUILDINGS.mixer_chocolate.factory((6, 3), Direction.E)
     info = info_mod.for_assembler(asm)
     assert info.footprint == (2, 2)
     assert info.rotation is Direction.E
     by_kind: dict[PortKind, info_mod.PortInfo] = {
         p.kind: p for p in info.port_rows
     }
-    # Plate assembler: 1 input on (0,0) west, 1 output on (1,0) east.
+    # Chocolate mixer: 1 input on (0,0) west, 1 output on (1,0) east.
     assert by_kind[PortKind.INPUT].cell_offset == (0, 0)
     assert by_kind[PortKind.INPUT].side is Direction.W
     assert by_kind[PortKind.OUTPUT].cell_offset == (1, 0)
@@ -233,7 +233,7 @@ def test_structure_menu_world_highlight_follows_hovered_port(reset_menu_session)
         menu.layout((1280, 720))
 
         origin = (5, 7)
-        miner = BUILDINGS.miner_iron.factory(origin, Direction.E)
+        miner = BUILDINGS.extractor_cocoa.factory(origin, Direction.E)
         menu.open_building(miner)
 
         # Initial update with mouse far off to populate info + layout.
@@ -257,10 +257,10 @@ def test_structure_menu_world_highlight_follows_hovered_port(reset_menu_session)
         menu.update(0.016, mouse, False, False)
         highlight = menu.world_highlight()
         assert highlight is not None
-        # Highlight cell = origin + cell_offset; miner port is at (0,0).
+        # Highlight cell = origin + cell_offset; extractor port is at (0,0).
         assert highlight.cell == origin
         assert highlight.footprint == (1, 1)
-        assert highlight.accent == ITEMS.iron.color
+        assert highlight.accent == ITEMS.cocoa_bean.color
     finally:
         pygame.quit()
 
@@ -278,7 +278,7 @@ def test_menu_saves_session_position_after_drag(reset_menu_session) -> None:
         menu = StructureMenu(_StubAssets())  # type: ignore[arg-type]
         menu.layout((1280, 720))
 
-        miner = BUILDINGS.miner_iron.factory((3, 3), Direction.E)
+        miner = BUILDINGS.extractor_cocoa.factory((3, 3), Direction.E)
         menu.open_building(miner)
         menu.update(0.016, (-1, -1), False, False)
         _snap_menu_to_rest(menu)
@@ -340,7 +340,7 @@ def test_menu_second_open_reuses_session_position(reset_menu_session) -> None:
         menu = StructureMenu(_StubAssets())  # type: ignore[arg-type]
         menu.layout((1280, 720))
 
-        miner = BUILDINGS.miner_iron.factory((1, 1), Direction.E)
+        miner = BUILDINGS.extractor_cocoa.factory((1, 1), Direction.E)
         menu.open_building(miner)
         # Pump a frame then snap animations so rect() returns the resting pos.
         menu.update(0.016, (-1, -1), False, False)

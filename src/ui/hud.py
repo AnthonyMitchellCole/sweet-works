@@ -26,11 +26,12 @@ class HUD:
         self.events = events
 
         self._tracked: tuple[ItemType, ...] = (
-            ITEMS.iron,
-            ITEMS.copper,
-            ITEMS.coal,
-            ITEMS.plate,
-            ITEMS.gear,
+            ITEMS.cocoa_bean,
+            ITEMS.sugar_crystal,
+            ITEMS.milk,
+            ITEMS.chocolate,
+            ITEMS.caramel,
+            ITEMS.candy_bar,
         )
         self._counts: dict[str, int] = {t.id: 0 for t in self._tracked}
         self._pulses: dict[str, AnimValue] = {
@@ -63,7 +64,7 @@ class HUD:
         rect = pygame.Rect(pad, pad, surface.get_width() - pad * 2, height)
         beveled_panel(surface, rect, fill=PALETTE.bg_base, border=PALETTE.line)
 
-        title = self.assets.render_text("FAC-PY", TYPE.label, PALETTE.primary)
+        title = self.assets.render_text("SWEET WORKS", TYPE.label, PALETTE.primary)
         surface.blit(title, (rect.x + THEME.spacing.md, rect.y + (height - title.get_height()) // 2))
 
         x = rect.x + THEME.spacing.md + title.get_width() + THEME.spacing.xl

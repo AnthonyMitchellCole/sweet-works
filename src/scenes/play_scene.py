@@ -553,7 +553,7 @@ class PlayScene(Scene):
     def _render_hint(self, surface: pygame.Surface) -> None:
         assert self.game is not None
         hint = self.game.assets.render_text(
-            "WASD / MMB drag pan  -  scroll zoom  -  Q inspect  -  1-5 tool  -  R rotate  -  F3 perf  -  F4 sprite studio  -  LMB place/select  -  RMB delete  -  Alt hover info  -  ESC menu",
+            "WASD / MMB drag pan  -  scroll zoom  -  Q inspect  -  1-7 tool  -  R rotate  -  F3 perf  -  F4 sprite studio  -  LMB place/select  -  RMB delete  -  Alt hover info  -  ESC menu",
             TYPE.caption,
             PALETTE.muted,
         )
@@ -565,21 +565,57 @@ class PlayScene(Scene):
     # -- demo factory ------------------------------------------------------
 
     def _build_demo_factory(self) -> None:
+        """Build a working candy chain: cocoa -> chocolate; sugar + milk -> caramel;
+        chocolate + caramel -> candy bar.
+
+        Layout (tiles):
+          row 1 (y=1): sugar extractor (0,1) -> belt -> caramel pot @ (6,1)
+          row 2 (y=2): milk well (0,2) -> belt (joins caramel pot)
+          row 3 (y=5): cocoa extractor (0,5) -> belt -> chocolate mixer @ (6,5)
+          row 4 (y=3): caramel bus east (caramel -> wrapper top-left in)
+          row 5 (y=4): chocolate bus east (chocolate -> wrapper bottom-left in)
+          wrapper: (10, 3) 2x2 outputs candy bar east at (12,3).
+        """
         assert self.world is not None
+        w = self.world
 
-        # Iron miner at (0,3) facing east -> belt row -> assembler_plate at (6,3)
-        iron_miner = BUILDINGS.miner_iron.factory((0, 3), Direction.E)
-        self.world.place_building(iron_miner)
+        # --- Sugar + Milk -> Caramel Pot ---
+        w.place_building(BUILDINGS.extractor_sugar.factory((0, 1), Direction.E))
         for x in range(1, 6):
-            self.world.place_tile(ConveyorBelt((x, 3), Direction.E))
+            w.place_tile(ConveyorBelt((x, 1), Direction.E))
+        w.place_building(BUILDINGS.well_milk.factory((0, 2), Direction.E))
+        for x in range(1, 6):
+            w.place_tile(ConveyorBelt((x, 2), Direction.E))
 
-        # Plate assembler: 2x2 at (6,3). Input W at (6,3); Output E at (7,3).
-        plate_asm = BUILDINGS.assembler_plate.factory((6, 3), Direction.E)
-        self.world.place_building(plate_asm)
+        caramel_pot = BUILDINGS.pot_caramel.factory((6, 1), Direction.E)
+        w.place_building(caramel_pot)
 
-        # Belt chain from plate output east to gear assembler at (14,3)
-        for x in range(8, 14):
-            self.world.place_tile(ConveyorBelt((x, 3), Direction.E))
+        # Caramel output bus east to the candy wrapper's top-left input.
+        for x in range(8, 10):
+            w.place_tile(ConveyorBelt((x, 1), Direction.E))
+        for y in range(2, 4):
+            w.place_tile(ConveyorBelt((9, y), Direction.S))
 
-        gear_asm = BUILDINGS.assembler_gear.factory((14, 3), Direction.E)
-        self.world.place_building(gear_asm)
+        # --- Cocoa -> Chocolate Mixer ---
+        w.place_building(BUILDINGS.extractor_cocoa.factory((0, 5), Direction.E))
+        for x in range(1, 6):
+            w.place_tile(ConveyorBelt((x, 5), Direction.E))
+        w.place_building(BUILDINGS.extractor_cocoa.factory((0, 6), Direction.E))
+        for x in range(1, 6):
+            w.place_tile(ConveyorBelt((x, 6), Direction.E))
+
+        chocolate_mixer = BUILDINGS.mixer_chocolate.factory((6, 5), Direction.E)
+        w.place_building(chocolate_mixer)
+
+        # Chocolate output bus east + turn north to wrapper's bottom-left input.
+        for x in range(8, 10):
+            w.place_tile(ConveyorBelt((x, 5), Direction.E))
+        w.place_tile(ConveyorBelt((9, 4), Direction.N))
+
+        # --- Candy Wrapper (2x2) at (10,3) ---
+        candy_wrapper = BUILDINGS.wrapper_candy.factory((10, 3), Direction.E)
+        w.place_building(candy_wrapper)
+
+        # Candy bar output bus east.
+        for x in range(12, 18):
+            w.place_tile(ConveyorBelt((x, 3), Direction.E))

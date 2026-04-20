@@ -24,90 +24,126 @@ class BuildingPrefab:
     sprite_base: str = "building_base"
 
 
-def _miner_iron(origin: Coord, rotation: Direction) -> Building:
+def _extractor_cocoa(origin: Coord, rotation: Direction) -> Building:
     return Miner(
         origin,
-        ITEMS.iron,
+        ITEMS.cocoa_bean,
         period_ticks=10,
         rotation=rotation,
-        sprite_base="structure_miner_iron",
+        sprite_base="structure_extractor_cocoa",
     )
 
 
-def _miner_copper(origin: Coord, rotation: Direction) -> Building:
+def _extractor_sugar(origin: Coord, rotation: Direction) -> Building:
     return Miner(
         origin,
-        ITEMS.copper,
+        ITEMS.sugar_crystal,
         period_ticks=10,
         rotation=rotation,
-        sprite_base="structure_miner_copper",
+        sprite_base="structure_extractor_sugar",
     )
 
 
-def _miner_coal(origin: Coord, rotation: Direction) -> Building:
+def _well_milk(origin: Coord, rotation: Direction) -> Building:
     return Miner(
         origin,
-        ITEMS.coal,
+        ITEMS.milk,
         period_ticks=12,
         rotation=rotation,
-        sprite_base="structure_miner_coal",
+        sprite_base="structure_well_milk",
     )
 
 
-_RECIPE_PLATE = Recipe(
-    inputs=((ITEMS.iron, 1),),
-    outputs=((ITEMS.plate, 1),),
+_RECIPE_CHOCOLATE = Recipe(
+    inputs=((ITEMS.cocoa_bean, 1),),
+    outputs=((ITEMS.chocolate, 1),),
     ticks=20,
 )
 
-_RECIPE_GEAR = Recipe(
-    inputs=((ITEMS.plate, 2),),
-    outputs=((ITEMS.gear, 1),),
+_RECIPE_CARAMEL = Recipe(
+    inputs=((ITEMS.sugar_crystal, 1), (ITEMS.milk, 1)),
+    outputs=((ITEMS.caramel, 1),),
+    ticks=20,
+)
+
+_RECIPE_CANDY = Recipe(
+    inputs=((ITEMS.chocolate, 1), (ITEMS.caramel, 1)),
+    outputs=((ITEMS.candy_bar, 1),),
     ticks=30,
 )
 
 
-def _assembler_plate(origin: Coord, rotation: Direction) -> Building:
-    return Assembler(origin, _RECIPE_PLATE, rotation, sprite_base="structure_assembler_plate")
+def _mixer_chocolate(origin: Coord, rotation: Direction) -> Building:
+    return Assembler(
+        origin, _RECIPE_CHOCOLATE, rotation, sprite_base="structure_mixer_chocolate"
+    )
 
 
-def _assembler_gear(origin: Coord, rotation: Direction) -> Building:
-    return Assembler(origin, _RECIPE_GEAR, rotation, sprite_base="structure_assembler_gear")
+def _pot_caramel(origin: Coord, rotation: Direction) -> Building:
+    return Assembler(
+        origin, _RECIPE_CARAMEL, rotation, sprite_base="structure_pot_caramel"
+    )
+
+
+def _wrapper_candy(origin: Coord, rotation: Direction) -> Building:
+    return Assembler(
+        origin, _RECIPE_CANDY, rotation, sprite_base="structure_wrapper_candy"
+    )
 
 
 @dataclass(frozen=True)
 class BuildingRegistry:
-    miner_iron: BuildingPrefab = BuildingPrefab(
-        "miner_iron", "Iron Miner", (1, 1), _miner_iron, sprite_base="structure_miner_iron"
+    extractor_cocoa: BuildingPrefab = BuildingPrefab(
+        "extractor_cocoa",
+        "Cocoa Extractor",
+        (1, 1),
+        _extractor_cocoa,
+        sprite_base="structure_extractor_cocoa",
     )
-    miner_copper: BuildingPrefab = BuildingPrefab(
-        "miner_copper", "Copper Miner", (1, 1), _miner_copper, sprite_base="structure_miner_copper"
+    extractor_sugar: BuildingPrefab = BuildingPrefab(
+        "extractor_sugar",
+        "Sugar Extractor",
+        (1, 1),
+        _extractor_sugar,
+        sprite_base="structure_extractor_sugar",
     )
-    miner_coal: BuildingPrefab = BuildingPrefab(
-        "miner_coal", "Coal Miner", (1, 1), _miner_coal, sprite_base="structure_miner_coal"
+    well_milk: BuildingPrefab = BuildingPrefab(
+        "well_milk",
+        "Milk Well",
+        (1, 1),
+        _well_milk,
+        sprite_base="structure_well_milk",
     )
-    assembler_plate: BuildingPrefab = BuildingPrefab(
-        "assembler_plate",
-        "Plate Assembler",
+    mixer_chocolate: BuildingPrefab = BuildingPrefab(
+        "mixer_chocolate",
+        "Chocolate Mixer",
         (2, 2),
-        _assembler_plate,
-        sprite_base="structure_assembler_plate",
+        _mixer_chocolate,
+        sprite_base="structure_mixer_chocolate",
     )
-    assembler_gear: BuildingPrefab = BuildingPrefab(
-        "assembler_gear",
-        "Gear Assembler",
+    pot_caramel: BuildingPrefab = BuildingPrefab(
+        "pot_caramel",
+        "Caramel Pot",
         (2, 2),
-        _assembler_gear,
-        sprite_base="structure_assembler_gear",
+        _pot_caramel,
+        sprite_base="structure_pot_caramel",
+    )
+    wrapper_candy: BuildingPrefab = BuildingPrefab(
+        "wrapper_candy",
+        "Candy Wrapper",
+        (2, 2),
+        _wrapper_candy,
+        sprite_base="structure_wrapper_candy",
     )
 
     def all(self) -> tuple[BuildingPrefab, ...]:
         return (
-            self.miner_iron,
-            self.miner_copper,
-            self.miner_coal,
-            self.assembler_plate,
-            self.assembler_gear,
+            self.extractor_cocoa,
+            self.extractor_sugar,
+            self.well_milk,
+            self.mixer_chocolate,
+            self.pot_caramel,
+            self.wrapper_candy,
         )
 
 

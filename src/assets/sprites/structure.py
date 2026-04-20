@@ -103,18 +103,22 @@ def _draw_badge(
 
     picto = spec.pictogram
     tint = spec.tint
-    if picto == "ore_chunks":
-        draw.insignia_ore_chunks(surf, cx, cy, size, tint)
-    elif picto == "coal_lumps":
-        draw.insignia_coal_lumps(surf, cx, cy, size, tint)
-    elif picto == "plate_stack":
-        draw.insignia_plate_stack(surf, cx, cy, size, tint)
-    elif picto == "pinion":
-        rot = 0.0
-        if phase == "active":
-            frames = max(1, config.STRUCTURE_FRAMES)
-            rot = (frame / frames) * math.pi * 2
-        draw.insignia_pinion(surf, cx, cy, size, tint, rotation=rot)
+    frames = max(1, config.STRUCTURE_FRAMES)
+    rot = 0.0
+    if phase == "active":
+        rot = (frame / frames) * math.pi * 2
+    if picto == "cocoa_beans":
+        draw.insignia_cocoa_beans(surf, cx, cy, size, tint)
+    elif picto == "sugar_crystals":
+        draw.insignia_sugar_crystals(surf, cx, cy, size, tint)
+    elif picto == "milk_drops":
+        draw.insignia_milk_drops(surf, cx, cy, size, tint)
+    elif picto == "chocolate_stack":
+        draw.insignia_chocolate_stack(surf, cx, cy, size, tint)
+    elif picto == "caramel_swirl":
+        draw.insignia_caramel_swirl(surf, cx, cy, size, tint, rotation=rot)
+    elif picto == "candy_swirl":
+        draw.insignia_candy_swirl(surf, cx, cy, size, tint, rotation=rot)
     else:
         draw.fill_rect(surf, PALETTE.danger, cx - size // 2, cy - size // 2, size, size)
 
@@ -150,13 +154,12 @@ def _draw_overlay_under(
 ) -> None:
     if phase != "active":
         return
-    if spec.kind != "glow":
-        return
-    size = _scale(spec.size_at_64)
-    frames = max(1, config.STRUCTURE_FRAMES)
-    t = (frame % frames) / frames
-    pulse = 0.5 + 0.5 * math.sin(t * math.pi * 2)
-    draw.glow_halo(surf, body.centerx, body.centery, size // 2, accent, pulse=pulse)
+    if spec.kind == "glow":
+        size = _scale(spec.size_at_64)
+        frames = max(1, config.STRUCTURE_FRAMES)
+        t = (frame % frames) / frames
+        pulse = 0.5 + 0.5 * math.sin(t * math.pi * 2)
+        draw.glow_halo(surf, body.centerx, body.centery, size // 2, accent, pulse=pulse)
 
 
 def _draw_overlay_over(
@@ -170,11 +173,15 @@ def _draw_overlay_over(
 ) -> None:
     if phase != "active":
         return
-    if spec.kind != "drill":
-        return
-    size = _scale(spec.size_at_64)
     frames = max(1, config.STRUCTURE_FRAMES)
     t = (frame % frames) / frames
-    cx = body.centerx
-    cy = body.centery - _scale(2)
-    draw.drill_head(surf, cx, cy, size, phase=t)
+    if spec.kind == "auger":
+        size = _scale(spec.size_at_64)
+        cx = body.centerx
+        cy = body.centery - _scale(2)
+        draw.auger_head(surf, cx, cy, size, phase=t)
+    elif spec.kind == "steam":
+        size = _scale(spec.size_at_64)
+        cx = body.centerx
+        cy = body.top + _scale(8)
+        draw.steam_plume(surf, cx, cy, size, phase=t, tint=accent)
