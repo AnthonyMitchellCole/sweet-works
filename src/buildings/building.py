@@ -1,4 +1,14 @@
-"""Base class for all buildings (multi-cell, with typed ports)."""
+"""Base class for all buildings (multi-cell, with typed ports).
+
+Every building carries a ``rotation`` (one of :class:`Direction`) and a
+``mirrored`` flag. Subclasses declare their ports in a **local frame**
+(authored as if the building faces :attr:`Direction.E`, un-mirrored)
+via :meth:`Building._add_local_port`; the framework resolves those to
+world-space ``Port`` records under the live transform pair. Rotating or
+mirroring a placed building re-runs port resolution and flushes any
+stranded items back into the belt network, so the simulation stays
+consistent with what the UI is drawing.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +19,10 @@ import pygame
 from ..core import config
 from ..design.palette import PALETTE
 from ..items.item_type import EMPTY_ID
-from ..world.direction import Direction
+from ..world.direction import (
+    Direction,
+    resolve_local_port,
+)
 from ..world.tile import Coord
 from .port import Port, PortKind
 
@@ -22,7 +35,10 @@ if TYPE_CHECKING:
 class Building:
     """Abstract building.
 
-    Subclasses declare their footprint and port layout, then implement `tick`.
+    Subclasses declare their footprint and port layout, then implement
+    :meth:`tick`. Ports are authored in the local (E-facing,
+    un-mirrored) frame via :meth:`_add_local_port` so rotation + mirror
+    transforms flow through the framework.
     """
 
     name: str = "building"
@@ -34,10 +50,12 @@ class Building:
         origin: Coord,
         rotation: Direction = Direction.E,
         *,
+        mirrored: bool = False,
         sprite_base: str | None = None,
     ) -> None:
         self.origin: Coord = origin
         self.rotation: Direction = rotation
+        self.mirrored: bool = bool(mirrored)
         self.inputs: list[Port] = []
         self.outputs: list[Port] = []
         if sprite_base is not None:
@@ -57,7 +75,28 @@ class Building:
     # -- port layout -------------------------------------------------------
 
     def _configure_ports(self) -> None:
-        """Override to declare input/output ports relative to `self.origin`."""
+        """Override to declare input/output ports in the local (E-facing) frame."""
+
+    def _add_local_port(
+        self,
+        kind: PortKind,
+        side_local: Direction,
+        cell_offset_local: Coord = (0, 0),
+        **kwargs,
+    ) -> Port:
+        """Declare a port in the building-local (E-facing, un-mirrored) frame."""
+        side, cell_offset = resolve_local_port(
+            side_local,
+            cell_offset_local,
+            self.rotation,
+            self.mirrored,
+            self.footprint,
+        )
+        ox, oy = self.origin
+        world_cell = (ox + cell_offset[0], oy + cell_offset[1])
+        port = Port(kind=kind, side=side, cell=world_cell, **kwargs)
+        (self.inputs if kind is PortKind.INPUT else self.outputs).append(port)
+        return port
 
     def _add_port(
         self,
@@ -66,6 +105,12 @@ class Building:
         cell_offset: Coord = (0, 0),
         **kwargs,
     ) -> Port:
+        """Legacy absolute-side port helper.
+
+        Kept as a thin pass-through so any external subclasses that
+        author ports in world space continue to work. All in-tree
+        buildings use :meth:`_add_local_port` instead.
+        """
         ox, oy = self.origin
         dx, dy = cell_offset
         port = Port(kind=kind, side=side, cell=(ox + dx, oy + dy), **kwargs)
@@ -83,6 +128,60 @@ class Building:
             if p.cell == cell and p.side == side:
                 return p
         return None
+
+    # -- live transforms (rotation / mirror while placed) ------------------
+
+    def rotate_cw(self, *, world: World | None = None) -> None:
+        """Rotate the building 90 degrees clockwise in place.
+
+        Port buffers are drained (best-effort) onto the belt network
+        before the ports are re-resolved, so no items are stranded on
+        the old output side.
+        """
+        self._drain_ports_to_network(world)
+        self.rotation = self.rotation.rotate_cw()
+        self._reconfigure_ports()
+        self._notify_topology(world)
+
+    def toggle_mirror(self, *, world: World | None = None) -> None:
+        """Flip the building's port layout across its facing axis."""
+        self._drain_ports_to_network(world)
+        self.mirrored = not self.mirrored
+        self._reconfigure_ports()
+        self._notify_topology(world)
+
+    def _reconfigure_ports(self) -> None:
+        self.inputs = []
+        self.outputs = []
+        self._configure_ports()
+
+    def _drain_ports_to_network(self, world: World | None) -> None:
+        """Push buffered output items onto the belt network, drop inputs.
+
+        This is best-effort: items that can't be pushed onto an adjacent
+        belt are simply discarded (they'd be discarded anyway since the
+        port is about to move). Matches the forgiving "never strand
+        items on rotate" feel of placement FX.
+        """
+        if world is None or world.belt_network is None:
+            return
+        net = world.belt_network
+        for port in self.outputs:
+            while not port.is_empty():
+                tid = port.peek_id()
+                if tid == EMPTY_ID:
+                    port.pop_id()
+                    continue
+                dx, dy = port.side.vector
+                adj = (port.cell[0] + dx, port.cell[1] + dy)
+                if net.accept(adj, tid):
+                    port.pop_id()
+                else:
+                    break
+
+    def _notify_topology(self, world: World | None) -> None:
+        if world is not None and world.belt_network is not None:
+            world.belt_network.on_building_changed()
 
     # -- simulation --------------------------------------------------------
 
@@ -154,7 +253,9 @@ class Building:
             return None
         key = f"{self.sprite_base}_{phase}_f{frame}"
         try:
-            return assets.sprite_scaled(key, zoom)
+            return assets.structure_sprite_oriented(
+                key, self.rotation, self.mirrored, zoom
+            )
         except FileNotFoundError:
             return None
 

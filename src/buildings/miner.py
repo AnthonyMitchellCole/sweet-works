@@ -25,15 +25,22 @@ class Miner(Building):
         period_ticks: int = 12,
         rotation: Direction = Direction.E,
         *,
+        mirrored: bool = False,
         sprite_base: str | None = None,
     ) -> None:
         self.item = item
         self.period_ticks = max(1, period_ticks)
         self._timer: int = 0
-        super().__init__(origin, rotation, sprite_base=sprite_base)
+        super().__init__(
+            origin, rotation, mirrored=mirrored, sprite_base=sprite_base
+        )
 
     def _configure_ports(self) -> None:
-        self._add_port(PortKind.OUTPUT, side=self.rotation, cell_offset=(0, 0))
+        # Canonical frame: miner faces east; mirror/rotation are
+        # resolved by the framework.
+        self._add_local_port(
+            PortKind.OUTPUT, side_local=Direction.E, cell_offset_local=(0, 0)
+        )
 
     # -- animation state hooks --------------------------------------------
 

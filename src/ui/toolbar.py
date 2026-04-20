@@ -16,6 +16,7 @@ from ..design.typography import TYPE
 from ..rendering.animation import Tween
 from ..rendering.pixel import beveled_panel
 from ..rendering.pool import acquired
+from ..world.direction import Direction
 from .widget import Widget
 
 if TYPE_CHECKING:
@@ -91,6 +92,12 @@ class Toolbar:
         self.on_select = on_select or (lambda _: None)
         self.selected_index: int = 0
 
+        # Live placement-transform state mirrored from the cursor so the
+        # selected slot can render a rotation + mirror pip. Defaults keep
+        # the toolbar usable in isolation (tests, menu preview).
+        self._transform_rotation: Direction = Direction.E
+        self._transform_mirrored: bool = False
+
         n = len(self.slots)
         total_w = n * SLOT_SIZE + (n - 1) * SLOT_GAP
         self._panel_w = total_w + PANEL_PAD * 2
@@ -164,6 +171,11 @@ class Toolbar:
         self.selected_index = index
         self._widgets[self.selected_index].selected = True
         self.on_select(self.selected_slot())
+
+    def set_transform(self, rotation: Direction, mirrored: bool) -> None:
+        """Sync the rotation + mirror pip with the live placement cursor."""
+        self._transform_rotation = rotation
+        self._transform_mirrored = bool(mirrored)
 
     def handle_hotkey(self, key: int) -> bool:
         for i, slot in enumerate(self.slots):
@@ -242,6 +254,34 @@ class Toolbar:
         label = pygame.key.name(slot.hotkey).upper()
         surf = self.assets.render_text(label, TYPE.label, PALETTE.muted)
         surface.blit(surf, (rect.x + 4, rect.y + 4))
+
+        # Rotation / mirror pip on the selected prefab slot so the user
+        # sees the live transform state without reading the ghost.
+        if widget.selected and slot.prefab is not None:
+            self._draw_transform_pip(surface, rect)
+
+    def _draw_transform_pip(self, surface: pygame.Surface, rect: pygame.Rect) -> None:
+        """Tiny rotation chevron (plus mirror tick) in the slot's top-right."""
+        cx = rect.right - 10
+        cy = rect.top + 10
+        dx, dy = self._transform_rotation.vector
+        size = 5
+        perp = (-dy, dx)
+        tip = (cx + dx * size, cy + dy * size)
+        back = (cx - dx * size, cy - dy * size)
+        left = (back[0] + perp[0] * size, back[1] + perp[1] * size)
+        right = (back[0] - perp[0] * size, back[1] - perp[1] * size)
+        pygame.draw.polygon(surface, PALETTE.primary, [tip, left, right])
+        pygame.draw.polygon(surface, PALETTE.bg_deep, [tip, left, right], 1)
+        if self._transform_mirrored:
+            # Small dash on the perpendicular axis = "flipped".
+            pygame.draw.line(
+                surface,
+                PALETTE.secondary,
+                (cx + perp[0] * 7, cy + perp[1] * 7),
+                (cx - perp[0] * 7, cy - perp[1] * 7),
+                2,
+            )
 
     def _icon_for(self, slot: ToolSlot) -> pygame.Surface | None:
         if slot.id == "pointer":

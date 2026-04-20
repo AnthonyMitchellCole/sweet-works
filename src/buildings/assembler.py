@@ -48,12 +48,15 @@ class Assembler(Building):
         recipe: Recipe,
         rotation: Direction = Direction.E,
         *,
+        mirrored: bool = False,
         sprite_base: str | None = None,
     ) -> None:
         self.recipe = recipe
         self._craft: _Craft | None = None
         self._input_ports_by_type: dict[int, Port] = {}
-        super().__init__(origin, rotation, sprite_base=sprite_base)
+        super().__init__(
+            origin, rotation, mirrored=mirrored, sprite_base=sprite_base
+        )
 
     # -- animation state hooks --------------------------------------------
 
@@ -80,21 +83,26 @@ class Assembler(Building):
         return (self._craft.total - self._craft.remaining, self._craft.total)
 
     def _configure_ports(self) -> None:
+        # Canonical E-facing, un-mirrored frame: inputs live on the
+        # local W edge (one per recipe row), outputs on the local E
+        # edge at the top-right cell. The framework rotates / mirrors
+        # these into world space.
+        self._input_ports_by_type = {}
         for i, (item_type, _) in enumerate(self.recipe.inputs):
-            port = self._add_port(
+            port = self._add_local_port(
                 PortKind.INPUT,
-                side=Direction.W,
-                cell_offset=(0, min(i, self.footprint[1] - 1)),
+                side_local=Direction.W,
+                cell_offset_local=(0, min(i, self.footprint[1] - 1)),
                 filter=item_type,
                 capacity=8,
             )
             self._input_ports_by_type[item_type.type_id] = port
 
         for item_type, _ in self.recipe.outputs:
-            self._add_port(
+            self._add_local_port(
                 PortKind.OUTPUT,
-                side=Direction.E,
-                cell_offset=(self.footprint[0] - 1, 0),
+                side_local=Direction.E,
+                cell_offset_local=(self.footprint[0] - 1, 0),
                 filter=item_type,
                 capacity=8,
             )

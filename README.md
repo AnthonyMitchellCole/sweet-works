@@ -48,13 +48,27 @@ If you prefer to pre-populate fonts, drop these `.ttf` files into `assets/fonts/
 | Middle-mouse drag   | Pan camera (1:1, with release inertia)     |
 | Scroll wheel        | Zoom                                       |
 | 1 - 5          | Select prefab (belt, miners, assemblers)        |
-| R              | Rotate placement                                |
+| R              | Rotate placement (or rotate building under cursor) |
+| T              | Mirror placement (flip perpendicular to facing) |
+| Mouse 4 (X1)   | Rotate placement (secondary binding)            |
+| Mouse 5 (X2)   | Mirror placement (secondary binding)            |
 | Left click     | Place                                           |
 | Right click    | Delete                                          |
 | **F3**         | Toggle live performance HUD                     |
+| **F4**         | Toggle sprite studio                            |
 | Esc            | Back / quit                                     |
 | Enter (menu)   | Play                                            |
 | **B (menu)**   | Launch the 1M-item benchmark scene              |
+
+> **Rotation & Mirror**: Every placeable structure is rotatable in 90°
+> steps via `R` / Mouse 4. Mirror (`T` / Mouse 5) performs a
+> left/right flip across the building's facing axis -- for an
+> East-facing assembler it swaps the input/output rows between the top
+> and bottom of the footprint. Rotation and mirror are honoured by port
+> simulation, rendering, the placement ghost, and the structure menu
+> diagram. Pressing the same key while hovering a placed building
+> rotates / mirrors that building in place (items buffered on its
+> output port are flushed onto adjacent belts before the layout moves).
 
 ## Benchmarking
 

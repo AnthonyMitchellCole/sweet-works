@@ -20,7 +20,24 @@ from ..core import config
 from ..design.palette import Color
 from ..design.typography import ALL_STYLES, TextStyle
 from ..rendering.sprite_cache import ScaledSpriteCache
+from ..world.direction import Direction
 from . import generator, paths
+
+
+# Sprite authoring convention: structures are generated with their
+# accent on the local N side (visual "top"). The simulation's canonical
+# facing is Direction.E, so a ``rotation = Direction.E`` building needs
+# the authored sprite rotated so its "front" points east.
+_STRUCTURE_AUTHOR_FACING: Direction = Direction.N
+
+
+def structure_rotation_angle_deg(rotation: Direction) -> int:
+    """CCW angle used by pygame.transform.rotate to orient a structure.
+
+    Positive values are CCW. For Direction.E (canonical facing) this is
+    -90 deg so the authored N-up sprite ends up E-forward.
+    """
+    return rotation.angle_deg - _STRUCTURE_AUTHOR_FACING.angle_deg
 
 
 class AssetLoader:
@@ -113,6 +130,25 @@ class AssetLoader:
         """Return the sprite pre-scaled for the given camera zoom."""
         base = self.sprite(key)
         return self._scaled.get(key, base, zoom)
+
+    def structure_sprite_oriented(
+        self,
+        key: str,
+        rotation: Direction,
+        mirrored: bool,
+        zoom: float,
+    ) -> pygame.Surface:
+        """Return a structure sprite scaled, rotated, and optionally flipped.
+
+        Sprites are authored with the accent on the local N side; this
+        helper converts the live ``(rotation, mirrored)`` pair into the
+        correct pygame rotation + flip pipeline using
+        :func:`structure_rotation_angle_deg`. Results are cached in the
+        scaled-sprite cache's variant layer so repeat lookups are O(1).
+        """
+        base = self.sprite(key)
+        angle = structure_rotation_angle_deg(rotation)
+        return self._scaled.get_oriented(key, base, zoom, angle, mirrored)
 
     def belt(self, direction: str, frame: int) -> pygame.Surface:
         return self.sprite(f"belt_{direction}_f{frame}")

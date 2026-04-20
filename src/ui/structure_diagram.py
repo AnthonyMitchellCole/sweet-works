@@ -142,6 +142,8 @@ def draw_diagram(
             _draw_cell_glyph(surface, cell, info, assets)
 
     _draw_rotation_glyph(surface, grid_rect, info, time)
+    if info.mirrored:
+        _draw_mirror_glyph(surface, grid_rect, info, time)
 
     hits_by_index = {h.index: h for h in hits}
     for port in info.port_rows:
@@ -239,6 +241,82 @@ def _draw_rotation_glyph(
         pts = [(edge_x - size, edge_y - size), (edge_x, edge_y + size), (edge_x + size, edge_y - size)]
     pygame.draw.polygon(surface, color, pts)
     pygame.draw.polygon(surface, PALETTE.bg_deep, pts, 1)
+
+
+def _draw_mirror_glyph(
+    surface: pygame.Surface,
+    grid: pygame.Rect,
+    info: StructureInfo,
+    time: float,
+) -> None:
+    """Two-stroke reflection arrow drawn on the side opposite the chevron.
+
+    Placed on the "back" edge of the building (opposite the facing
+    direction) so it never overlaps the rotation chevron. Uses the same
+    breathing-halo idiom for visual consistency.
+    """
+    back = info.rotation.opposite
+    dx, dy = back.vector
+    edge_x = grid.centerx + int(dx * (grid.w / 2 - 14))
+    edge_y = grid.centery + int(dy * (grid.h / 2 - 14))
+
+    pulse = 0.5 + 0.5 * math.sin(time * 2.5 + math.pi)
+    halo_alpha = int(70 + 60 * pulse)
+    d = 40
+    with acquired((d, d)) as halo:
+        pygame.draw.circle(
+            halo,
+            with_alpha(PALETTE.secondary, halo_alpha // 2),
+            (d // 2, d // 2),
+            d // 2,
+        )
+        pygame.draw.circle(
+            halo,
+            with_alpha(PALETTE.secondary, halo_alpha),
+            (d // 2, d // 2),
+            d // 2 - 4,
+            1,
+        )
+        surface.blit(halo, (edge_x - d // 2, edge_y - d // 2))
+
+    # Two arrowheads pointing away from each other along the axis
+    # perpendicular to facing -- the "flip" axis.
+    color = lighten(PALETTE.secondary, 0.2)
+    # Perpendicular unit vector to facing.
+    fx, fy = info.rotation.vector
+    perp = (-fy, fx)
+    s = 8
+    ax = edge_x + perp[0] * 7
+    ay = edge_y + perp[1] * 7
+    bx = edge_x - perp[0] * 7
+    by = edge_y - perp[1] * 7
+    _arrowhead(surface, (ax, ay), perp, color, size=s)
+    _arrowhead(surface, (bx, by), (-perp[0], -perp[1]), color, size=s)
+    # Central divider line.
+    pygame.draw.line(
+        surface,
+        with_alpha(PALETTE.bg_deep, 200),
+        (edge_x + fx * 6, edge_y + fy * 6),
+        (edge_x - fx * 6, edge_y - fy * 6),
+        2,
+    )
+
+
+def _arrowhead(
+    surface: pygame.Surface,
+    tip: tuple[int, int],
+    direction: tuple[int, int],
+    color: tuple[int, int, int],
+    *,
+    size: int = 6,
+) -> None:
+    dx, dy = direction
+    perp = (-dy, dx)
+    back = (tip[0] - dx * size, tip[1] - dy * size)
+    left = (back[0] + perp[0] * size // 2, back[1] + perp[1] * size // 2)
+    right = (back[0] - perp[0] * size // 2, back[1] - perp[1] * size // 2)
+    pygame.draw.polygon(surface, color, [tip, left, right])
+    pygame.draw.polygon(surface, PALETTE.bg_deep, [tip, left, right], 1)
 
 
 def _draw_port_marker(

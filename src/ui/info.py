@@ -102,6 +102,7 @@ class StructureInfo:
     primary_item: ItemType | None = None
     footprint: tuple[int, int] = (1, 1)
     rotation: Direction = Direction.E
+    mirrored: bool = False
     rate_rows: tuple[InfoRow, ...] = ()
     port_rows: tuple[PortInfo, ...] = ()
     progress: float | None = None
@@ -161,6 +162,8 @@ def for_miner(m: Miner) -> StructureInfo:
     rate = miner_ipm(m.period_ticks)
     title = f"{m.item.name} Miner"
     subtitle = f"Miner - facing {_direction_word(m.rotation)}"
+    if m.mirrored:
+        subtitle += " (mirrored)"
     rate_rows = (
         InfoRow(label="Output", value=_fmt_rate(rate), item=m.item),
         InfoRow(label="Cycle", value=f"{m.period_ticks} ticks"),
@@ -182,6 +185,7 @@ def for_miner(m: Miner) -> StructureInfo:
         primary_item=m.item,
         footprint=m.footprint,
         rotation=m.rotation,
+        mirrored=m.mirrored,
         rate_rows=rate_rows,
         port_rows=port_rows,
         progress=None,
@@ -194,7 +198,9 @@ def for_assembler(a: Assembler) -> StructureInfo:
     cpm = assembler_cycles_per_minute(a.recipe.ticks)
     primary_out = a.recipe.outputs[0][0] if a.recipe.outputs else None
     title = f"{primary_out.name} Assembler" if primary_out is not None else "Assembler"
-    subtitle = f"Assembler - {a.recipe.ticks} ticks / cycle"
+    subtitle = f"Assembler - facing {_direction_word(a.rotation)}"
+    if a.mirrored:
+        subtitle += " (mirrored)"
 
     rate_rows: list[InfoRow] = []
     for item, qty in a.recipe.inputs:
@@ -251,6 +257,7 @@ def for_assembler(a: Assembler) -> StructureInfo:
         primary_item=primary_out,
         footprint=a.footprint,
         rotation=a.rotation,
+        mirrored=a.mirrored,
         rate_rows=tuple(rate_rows),
         port_rows=port_rows,
         progress=progress,

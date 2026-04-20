@@ -137,7 +137,9 @@ class PlayScene(Scene):
 
                 self.game.replace_scene(MenuScene())
             elif event.key == pygame.K_r and self.cursor is not None:
-                self.cursor.rotate_cw()
+                self._rotate_at_cursor()
+            elif event.key == pygame.K_t and self.cursor is not None:
+                self._mirror_at_cursor()
             elif event.key == pygame.K_F3 and self.perf_hud is not None:
                 self.perf_hud.toggle()
             elif event.key == pygame.K_F4 and self.studio is not None:
@@ -175,6 +177,7 @@ class PlayScene(Scene):
             self.game.input.mouse_released(1),
         )
         self.cursor.set_tool(self.toolbar.selected_slot())
+        self.toolbar.set_transform(self.cursor.rotation, self.cursor.mirrored)
 
         tile_pos = self.camera.screen_to_tile(*mouse_pos)
 
@@ -233,6 +236,11 @@ class PlayScene(Scene):
                 self._on_lmb(tile_pos, is_pointer)
             if self.game.input.mouse_pressed(3) and not is_pointer:
                 self._on_rmb(tile_pos)
+            # Secondary mouse bindings: X1 = rotate, X2 = mirror.
+            if self.game.input.mouse_pressed(pygame.BUTTON_X1):
+                self._rotate_at_cursor()
+            if self.game.input.mouse_pressed(pygame.BUTTON_X2):
+                self._mirror_at_cursor()
 
         for _ in range(sim_ticks):
             with timed(PERF.tick):
@@ -240,6 +248,7 @@ class PlayScene(Scene):
 
         self.world.advance_time(dt)
         self.hud.update(dt)
+        self.hud.set_transform(self.cursor.rotation, self.cursor.mirrored)
 
     # -- render ------------------------------------------------------------
 
@@ -391,6 +400,48 @@ class PlayScene(Scene):
         if self.cursor is not None:
             self.cursor.set_tool(slot)
 
+    def _rotate_at_cursor(self) -> None:
+        """Rotate an existing building under the cursor, otherwise the ghost."""
+        if self.cursor is None:
+            return
+        building = self._building_under_mouse()
+        if building is not None:
+            building.rotate_cw(world=self.world)
+            if self.fx is not None and self.world is not None:
+                self.fx.spawn_rotate(
+                    building.origin,
+                    building.footprint,
+                    self.world.time,
+                    PALETTE.primary,
+                )
+        else:
+            self.cursor.rotate_cw()
+
+    def _mirror_at_cursor(self) -> None:
+        """Toggle mirror on the hovered building, otherwise on the ghost."""
+        if self.cursor is None:
+            return
+        building = self._building_under_mouse()
+        if building is not None:
+            building.toggle_mirror(world=self.world)
+            if self.fx is not None and self.world is not None:
+                self.fx.spawn_mirror(
+                    building.origin,
+                    building.footprint,
+                    self.world.time,
+                    PALETTE.secondary,
+                )
+        else:
+            self.cursor.mirror()
+
+    def _building_under_mouse(self) -> Building | None:
+        if self.world is None or self.camera is None or self.game is None:
+            return None
+        tile_pos = self.camera.screen_to_tile(*self.game.input.mouse_pos)
+        if self._point_over_ui(self.game.input.mouse_pos):
+            return None
+        return self.world.building_at(tile_pos)
+
     def _footprint_is_free(self, origin: tuple[int, int]) -> bool:
         """True when the full footprint of the currently selected tool is free."""
         if self.world is None or self.cursor is None or self.cursor.tool is None:
@@ -530,7 +581,7 @@ class PlayScene(Scene):
         prefab: BuildingPrefab | None = slot.prefab
         if prefab is None:
             return
-        building = prefab.factory(tile_pos, self.cursor.rotation)
+        building = prefab.factory(tile_pos, self.cursor.rotation, self.cursor.mirrored)
         if self.world.place_building(building) and self.fx is not None:
             self.fx.spawn_place(
                 building.origin, building.footprint, self.world.time, PALETTE.secondary
@@ -553,7 +604,7 @@ class PlayScene(Scene):
     def _render_hint(self, surface: pygame.Surface) -> None:
         assert self.game is not None
         hint = self.game.assets.render_text(
-            "WASD / MMB drag pan  -  scroll zoom  -  Q inspect  -  1-7 tool  -  R rotate  -  F3 perf  -  F4 sprite studio  -  LMB place/select  -  RMB delete  -  Alt hover info  -  ESC menu",
+            "WASD / MMB drag pan  -  scroll zoom  -  Q inspect  -  1-7 tool  -  R / X1 rotate  -  T / X2 mirror  -  F3 perf  -  F4 sprite studio  -  LMB place/select  -  RMB delete  -  Alt hover info  -  ESC menu",
             TYPE.caption,
             PALETTE.muted,
         )

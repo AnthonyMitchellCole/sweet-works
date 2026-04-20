@@ -91,6 +91,34 @@ def _phase_progress(reveal: float, key: str) -> float:
     return max(0.0, min(1.0, (reveal - start) / (end - start)))
 
 
+def _connector_endpoints(
+    callout: pygame.Rect,
+    marker: pygame.Rect,
+    anchor_side: str,
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return ``(start, end)`` absolute pixel coordinates for a connector.
+
+    ``anchor_side`` is the edge of the *callout* that the connector
+    exits from; the connector terminates at the opposite (near) edge
+    of the marker so the line never visually crosses through it. Kept
+    as a module-level pure function so the geometry is easy to test.
+    """
+    half = PORT_MARKER // 2
+    if anchor_side == "left":
+        start = (callout.left, callout.centery)
+        end = (marker.centerx + half, marker.centery)
+    elif anchor_side == "right":
+        start = (callout.right, callout.centery)
+        end = (marker.centerx - half, marker.centery)
+    elif anchor_side == "top":
+        start = (callout.centerx, callout.top)
+        end = (marker.centerx, marker.centery + half)
+    else:  # "bottom"
+        start = (callout.centerx, callout.bottom)
+        end = (marker.centerx, marker.centery - half)
+    return start, end
+
+
 class StructureMenu:
     """Detail panel for the selected structure.
 
@@ -564,27 +592,62 @@ class StructureMenu:
         return surf.get_height()
 
     def _hero_band_height(self, info: StructureInfo) -> int:
-        _diag_w, diag_h = diagram_size(info)
-        col_h = self._callout_column_height(info)
-        return max(diag_h, col_h) + THEME.spacing.sm
+        diag_h = self._diagram_middle_height(info)
+        top_h, bottom_h = self._top_bottom_band_heights(info)
+        return top_h + diag_h + bottom_h + THEME.spacing.sm
 
-    def _callout_column_height(self, info: StructureInfo) -> int:
+    def _diagram_middle_height(self, info: StructureInfo) -> int:
+        """Height of the middle row: max(diagram, left column, right column)."""
+        _diag_w, diag_h = diagram_size(info)
         left = sum(1 for p in info.port_rows if p.side is Direction.W)
         right = sum(1 for p in info.port_rows if p.side is Direction.E)
-        top = sum(1 for p in info.port_rows if p.side is Direction.N)
-        bottom = sum(1 for p in info.port_rows if p.side is Direction.S)
-        vertical_max = max(left, right)
-        h_main = vertical_max * (_CALLOUT_H + _CALLOUT_GAP) - _CALLOUT_GAP if vertical_max > 0 else 0
-        if top > 0 or bottom > 0:
-            h_main += (_CALLOUT_H + _CALLOUT_GAP)
-        return max(h_main, 0)
+        col_h_left = (
+            left * (_CALLOUT_H + _CALLOUT_GAP) - _CALLOUT_GAP if left else 0
+        )
+        col_h_right = (
+            right * (_CALLOUT_H + _CALLOUT_GAP) - _CALLOUT_GAP if right else 0
+        )
+        return max(diag_h, col_h_left, col_h_right)
+
+    def _top_bottom_band_heights(self, info: StructureInfo) -> tuple[int, int]:
+        """Height reserved above / below the diagram for N and S callouts."""
+        top_rows = self._nb_row_count(info, Direction.N)
+        bottom_rows = self._nb_row_count(info, Direction.S)
+        top_h = (
+            top_rows * (_CALLOUT_H + _CALLOUT_GAP) if top_rows > 0 else 0
+        )
+        bottom_h = (
+            bottom_rows * (_CALLOUT_H + _CALLOUT_GAP) if bottom_rows > 0 else 0
+        )
+        return top_h, bottom_h
+
+    def _nb_row_count(self, info: StructureInfo, side: Direction) -> int:
+        """How many stacked rows of N/S callouts we need to avoid overlap.
+
+        Delegates to the same greedy row-packing used at render time so
+        the measured band height always matches what will actually be
+        drawn. Panel width is fixed (:data:`_PANEL_W`) so we can build a
+        synthetic panel rect and mirror the render-time ``diag_center``.
+        """
+        ports = [p for p in info.port_rows if p.side is side]
+        if not ports:
+            return 0
+        fake_panel = pygame.Rect(0, 0, _PANEL_W, 1)
+        diag_center = (fake_panel.centerx, 0)
+        _, hits = layout_diagram(diag_center, info)
+        hits_by_index = {h.index: h for h in hits}
+        placed = self._layout_nb_callouts(ports, hits_by_index, fake_panel)
+        if not placed:
+            return 0
+        return max(r.y for r, _ in placed) + 1
 
     def _diagram_center(
         self, panel_rect: pygame.Rect, info: StructureInfo
     ) -> tuple[int, int]:
         band_top = panel_rect.top + _PAD + _HEADER_H + THEME.spacing.sm
-        band_h = self._hero_band_height(info)
-        return (panel_rect.centerx, band_top + band_h // 2)
+        top_h, _ = self._top_bottom_band_heights(info)
+        middle_h = self._diagram_middle_height(info)
+        return (panel_rect.centerx, band_top + top_h + middle_h // 2)
 
     # -- render ------------------------------------------------------------
 
@@ -756,7 +819,11 @@ class StructureMenu:
         band_phase = _phase_progress(reveal, "diagram")
         callout_phase = _phase_progress(reveal, "callouts")
 
-        diag_center = (rect.centerx, y + band_h // 2)
+        top_h, bottom_h = self._top_bottom_band_heights(info)
+        middle_h = self._diagram_middle_height(info)
+        # Diagram center shifts down by the N-callout band so N ports
+        # stack above the diagram, not over it.
+        diag_center = (rect.centerx, y + top_h + middle_h // 2)
         port_fill = {idx: a.value for idx, a in self._port_anims.items()}
 
         # Render the diagram off-screen first so we can fade it.
@@ -780,16 +847,16 @@ class StructureMenu:
             offset = int((1.0 - band_phase) * 6)
             surface.blit(diag_layer, (diag_pos[0], diag_pos[1] + offset))
 
-        # Recompute hit rects (should match what layout_diagram uses).
+        # Recompute hit rects (matches what layout_diagram uses elsewhere).
         _, hits = layout_diagram(diag_center, info)
         hits_by_index = {h.index: h for h in hits}
 
-        # Layout callout columns.
         left_ports = [p for p in info.port_rows if p.side is Direction.W]
         right_ports = [p for p in info.port_rows if p.side is Direction.E]
         top_ports = [p for p in info.port_rows if p.side is Direction.N]
         bottom_ports = [p for p in info.port_rows if p.side is Direction.S]
 
+        # -- West / East: stack vertically in the middle band -----------
         col_h_left = (
             len(left_ports) * (_CALLOUT_H + _CALLOUT_GAP) - _CALLOUT_GAP
             if left_ports else 0
@@ -798,12 +865,11 @@ class StructureMenu:
             len(right_ports) * (_CALLOUT_H + _CALLOUT_GAP) - _CALLOUT_GAP
             if right_ports else 0
         )
-
+        middle_top = y + top_h
+        left_y0 = middle_top + (middle_h - col_h_left) // 2
+        right_y0 = middle_top + (middle_h - col_h_right) // 2
         left_x = rect.x + _PAD
         right_x = rect.right - _PAD - _CALLOUT_W
-
-        left_y0 = y + (band_h - col_h_left) // 2
-        right_y0 = y + (band_h - col_h_right) // 2
 
         for i, port in enumerate(left_ports):
             cy = left_y0 + i * (_CALLOUT_H + _CALLOUT_GAP)
@@ -821,28 +887,93 @@ class StructureMenu:
                 hit=hits_by_index.get(port.index), phase=callout_phase,
             )
 
-        # Top/bottom ports use a wider horizontal pill to avoid covering
-        # the diagram and are stacked centrally above/below.
-        for i, port in enumerate(top_ports):
-            cw = min(_CALLOUT_W * 2, rect.w - _PAD * 2)
-            cx = rect.centerx - cw // 2
-            cy = y + i * (_CALLOUT_H + _CALLOUT_GAP)
-            callout_rect = pygame.Rect(cx, cy, cw, _CALLOUT_H)
+        # -- North / South: distribute horizontally at marker.x --------
+        # row_idx 0 always sits closest to the diagram; deeper rows pack
+        # away from it so the visual association is preserved even when
+        # overlap forces a second row.
+        top_layout = self._layout_nb_callouts(top_ports, hits_by_index, rect)
+        for rect_c, port in top_layout:
+            row_idx = rect_c.y
+            cy = y + top_h - (row_idx + 1) * (_CALLOUT_H + _CALLOUT_GAP)
+            placed = pygame.Rect(rect_c.x, cy, rect_c.w, _CALLOUT_H)
             self._render_callout(
-                surface, callout_rect, port, anchor_side="bottom",
+                surface, placed, port, anchor_side="bottom",
                 hit=hits_by_index.get(port.index), phase=callout_phase,
             )
-        for i, port in enumerate(bottom_ports):
-            cw = min(_CALLOUT_W * 2, rect.w - _PAD * 2)
-            cx = rect.centerx - cw // 2
-            cy = y + band_h - _CALLOUT_H - i * (_CALLOUT_H + _CALLOUT_GAP)
-            callout_rect = pygame.Rect(cx, cy, cw, _CALLOUT_H)
+
+        bottom_layout = self._layout_nb_callouts(bottom_ports, hits_by_index, rect)
+        bottom_band_top = y + top_h + middle_h
+        for rect_c, port in bottom_layout:
+            row_idx = rect_c.y
+            cy = bottom_band_top + _CALLOUT_GAP + row_idx * (_CALLOUT_H + _CALLOUT_GAP)
+            placed = pygame.Rect(rect_c.x, cy, rect_c.w, _CALLOUT_H)
             self._render_callout(
-                surface, callout_rect, port, anchor_side="top",
+                surface, placed, port, anchor_side="top",
                 hit=hits_by_index.get(port.index), phase=callout_phase,
             )
 
         return y + band_h + THEME.spacing.sm
+
+    def _layout_nb_callouts(
+        self,
+        ports: list[PortInfo],
+        hits_by_index: dict[int, PortHit],
+        panel_rect: pygame.Rect,
+    ) -> list[tuple[pygame.Rect, PortInfo]]:
+        """Row-packed layout for North/South callouts.
+
+        Returns (rect, port) tuples where ``rect.x``/``rect.w`` are final
+        horizontal placements and ``rect.y`` holds the *row index* (the
+        caller converts that to a real y once it knows which band it is
+        laying out). Callouts are anchored at their marker's centerx,
+        clamped to the panel interior, and stacked into additional rows
+        when they would overlap.
+        """
+        if not ports:
+            return []
+        left_bound = panel_rect.x + _PAD
+        right_bound = panel_rect.right - _PAD
+        cw = min(_CALLOUT_W, max(_CALLOUT_W // 2, right_bound - left_bound))
+
+        # Sort by marker.centerx so the row-packing greedy is stable.
+        entries: list[tuple[int, PortInfo]] = []
+        for p in ports:
+            hit = hits_by_index.get(p.index)
+            cx = hit.rect.centerx if hit is not None else panel_rect.centerx
+            entries.append((cx, p))
+        entries.sort(key=lambda e: e[0])
+
+        # Shrink callout width to the narrowest marker-to-marker gap so
+        # adjacent ports (e.g. two N-side inputs on a rotated wrapper)
+        # fit on a single row instead of falling onto a stacked second
+        # row. The floor keeps the card readable.
+        if len(entries) >= 2:
+            centerxs = [cx for cx, _ in entries]
+            min_gap = min(
+                centerxs[i + 1] - centerxs[i] for i in range(len(centerxs) - 1)
+            )
+            cw = max(
+                _CALLOUT_W // 2,
+                min(cw, min_gap - _CALLOUT_GAP),
+            )
+
+        rows: list[int] = []  # rightmost x used per row
+        placed: list[tuple[pygame.Rect, PortInfo]] = []
+        for cx, port in entries:
+            left = cx - cw // 2
+            left = max(left_bound, min(right_bound - cw, left))
+            right = left + cw
+            row_idx = -1
+            for i, row_right in enumerate(rows):
+                if left >= row_right + _CALLOUT_GAP:
+                    rows[i] = right
+                    row_idx = i
+                    break
+            if row_idx < 0:
+                rows.append(right)
+                row_idx = len(rows) - 1
+            placed.append((pygame.Rect(left, row_idx, cw, _CALLOUT_H), port))
+        return placed
 
     def _render_callout(
         self,
@@ -965,20 +1096,7 @@ class StructureMenu:
     ) -> None:
         if phase <= 0.1:
             return
-        if anchor_side == "left":
-            start = (callout.left, callout.centery)
-        elif anchor_side == "right":
-            start = (callout.right, callout.centery)
-        elif anchor_side == "top":
-            start = (callout.centerx, callout.top)
-        else:
-            start = (callout.centerx, callout.bottom)
-        end = (
-            hit.rect.centerx + (-PORT_MARKER // 2 if anchor_side == "left" else
-                                PORT_MARKER // 2 if anchor_side == "right" else 0),
-            hit.rect.centery + (-PORT_MARKER // 2 if anchor_side == "top" else
-                                PORT_MARKER // 2 if anchor_side == "bottom" else 0),
-        )
+        start, end = _connector_endpoints(callout, hit.rect, anchor_side)
 
         alpha = int(150 * phase)
         line_c = with_alpha(color, alpha)

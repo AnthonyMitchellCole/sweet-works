@@ -171,6 +171,106 @@ def test_for_mixer_populates_footprint_and_port_layout() -> None:
     assert indices == sorted(set(indices))
 
 
+def test_for_mixer_port_layout_rotates_with_building() -> None:
+    """Assemblers rotate their ports through the framework, not manual code.
+
+    Locked in: for each rotation, the port set is the canonical
+    (input_local=W@(0,0), output_local=E@(1,0)) pair transformed by
+    :func:`resolve_local_port`.
+    """
+    from src.world.direction import resolve_local_port
+
+    for rot in (Direction.N, Direction.E, Direction.S, Direction.W):
+        asm = BUILDINGS.mixer_chocolate.factory((0, 0), rot)
+        info = info_mod.for_assembler(asm)
+        assert info.rotation is rot
+        assert info.mirrored is False
+
+        exp_in_side, exp_in_off = resolve_local_port(
+            Direction.W, (0, 0), rot, False, (2, 2)
+        )
+        exp_out_side, exp_out_off = resolve_local_port(
+            Direction.E, (1, 0), rot, False, (2, 2)
+        )
+        by_kind = {p.kind: p for p in info.port_rows}
+        assert by_kind[PortKind.INPUT].side is exp_in_side
+        assert by_kind[PortKind.INPUT].cell_offset == exp_in_off
+        assert by_kind[PortKind.OUTPUT].side is exp_out_side
+        assert by_kind[PortKind.OUTPUT].cell_offset == exp_out_off
+
+
+def test_for_mixer_port_layout_mirrors() -> None:
+    """Mirror flips the perpendicular port row while preserving flow."""
+    from src.world.direction import resolve_local_port
+
+    for rot in (Direction.N, Direction.E, Direction.S, Direction.W):
+        for mirrored in (False, True):
+            asm = BUILDINGS.mixer_chocolate.factory((0, 0), rot, mirrored)
+            info = info_mod.for_assembler(asm)
+            assert info.rotation is rot
+            assert info.mirrored is mirrored
+
+            exp_in_side, exp_in_off = resolve_local_port(
+                Direction.W, (0, 0), rot, mirrored, (2, 2)
+            )
+            exp_out_side, exp_out_off = resolve_local_port(
+                Direction.E, (1, 0), rot, mirrored, (2, 2)
+            )
+            by_kind = {p.kind: p for p in info.port_rows}
+            assert by_kind[PortKind.INPUT].side is exp_in_side
+            assert by_kind[PortKind.INPUT].cell_offset == exp_in_off
+            assert by_kind[PortKind.OUTPUT].side is exp_out_side
+            assert by_kind[PortKind.OUTPUT].cell_offset == exp_out_off
+
+
+def test_for_wrapper_candy_inputs_rotate_and_mirror_distinct() -> None:
+    """Wrapper has two inputs on (0, y); mirror must swap their rows."""
+    unmirrored = BUILDINGS.wrapper_candy.factory((0, 0), Direction.E, False)
+    mirrored = BUILDINGS.wrapper_candy.factory((0, 0), Direction.E, True)
+    info_u = info_mod.for_assembler(unmirrored)
+    info_m = info_mod.for_assembler(mirrored)
+
+    inputs_u = [p.cell_offset for p in info_u.port_rows if p.kind is PortKind.INPUT]
+    inputs_m = [p.cell_offset for p in info_m.port_rows if p.kind is PortKind.INPUT]
+    # Swapping both ports' y-coords produces the mirrored set.
+    assert sorted(inputs_u) == sorted((x, 1 - y) for (x, y) in inputs_m)
+
+
+def test_miner_subtitle_reflects_mirror_state() -> None:
+    mirrored = BUILDINGS.extractor_cocoa.factory((0, 0), Direction.E, True)
+    info = info_mod.for_miner(mirrored)
+    assert info.mirrored is True
+    assert "(mirrored)" in info.subtitle
+
+
+def test_building_rotate_cw_reconfigures_ports() -> None:
+    """Rotating an existing building re-resolves its ports immediately."""
+    asm = BUILDINGS.mixer_chocolate.factory((0, 0), Direction.E)
+    assert asm.outputs[0].side is Direction.E
+    asm.rotate_cw()
+    assert asm.rotation is Direction.S
+    # East-facing output → South after a single CW step.
+    assert asm.outputs[0].side is Direction.S
+
+
+def test_building_toggle_mirror_swaps_ports() -> None:
+    """Mirror swaps the rows so recipe-input assignments move as expected."""
+    wrapper = BUILDINGS.wrapper_candy.factory((0, 0), Direction.E)
+    # Port filters are preserved in order; the y-coordinate for each
+    # specific input filter is what mirror should swap.
+    pre = {p.filter.type_id: p.cell for p in wrapper.inputs}
+    wrapper.toggle_mirror()
+    assert wrapper.mirrored is True
+    post = {p.filter.type_id: p.cell for p in wrapper.inputs}
+    # Each filter's input port landed on a different y after the flip.
+    assert pre != post
+    for tid, pre_cell in pre.items():
+        assert post[tid][1] == 1 - pre_cell[1]
+    wrapper.toggle_mirror()
+    assert wrapper.mirrored is False
+    assert pre == {p.filter.type_id: p.cell for p in wrapper.inputs}
+
+
 def test_for_belt_populates_footprint_and_rotation() -> None:
     for rot in (Direction.N, Direction.E, Direction.S, Direction.W):
         belt = ConveyorBelt((0, 0), rot)

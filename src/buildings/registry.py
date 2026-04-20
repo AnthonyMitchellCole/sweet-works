@@ -1,4 +1,10 @@
-"""Named building prefabs, used by the toolbar and scenes."""
+"""Named building prefabs, used by the toolbar and scenes.
+
+Factories accept ``(origin, rotation, mirrored=False)``; the mirrored
+argument is optional so the one-positional-call style at demo sites
+stays unchanged while the scene-side placement and on-the-fly
+transforms pass through the flag.
+"""
 
 from __future__ import annotations
 
@@ -12,7 +18,7 @@ from .assembler import Assembler, Recipe
 from .building import Building
 from .miner import Miner
 
-BuildingFactory = Callable[[Coord, Direction], Building]
+BuildingFactory = Callable[..., Building]
 
 
 @dataclass(frozen=True)
@@ -24,32 +30,41 @@ class BuildingPrefab:
     sprite_base: str = "building_base"
 
 
-def _extractor_cocoa(origin: Coord, rotation: Direction) -> Building:
+def _extractor_cocoa(
+    origin: Coord, rotation: Direction, mirrored: bool = False
+) -> Building:
     return Miner(
         origin,
         ITEMS.cocoa_bean,
         period_ticks=10,
         rotation=rotation,
+        mirrored=mirrored,
         sprite_base="structure_extractor_cocoa",
     )
 
 
-def _extractor_sugar(origin: Coord, rotation: Direction) -> Building:
+def _extractor_sugar(
+    origin: Coord, rotation: Direction, mirrored: bool = False
+) -> Building:
     return Miner(
         origin,
         ITEMS.sugar_crystal,
         period_ticks=10,
         rotation=rotation,
+        mirrored=mirrored,
         sprite_base="structure_extractor_sugar",
     )
 
 
-def _well_milk(origin: Coord, rotation: Direction) -> Building:
+def _well_milk(
+    origin: Coord, rotation: Direction, mirrored: bool = False
+) -> Building:
     return Miner(
         origin,
         ITEMS.milk,
         period_ticks=12,
         rotation=rotation,
+        mirrored=mirrored,
         sprite_base="structure_well_milk",
     )
 
@@ -73,21 +88,39 @@ _RECIPE_CANDY = Recipe(
 )
 
 
-def _mixer_chocolate(origin: Coord, rotation: Direction) -> Building:
+def _mixer_chocolate(
+    origin: Coord, rotation: Direction, mirrored: bool = False
+) -> Building:
     return Assembler(
-        origin, _RECIPE_CHOCOLATE, rotation, sprite_base="structure_mixer_chocolate"
+        origin,
+        _RECIPE_CHOCOLATE,
+        rotation,
+        mirrored=mirrored,
+        sprite_base="structure_mixer_chocolate",
     )
 
 
-def _pot_caramel(origin: Coord, rotation: Direction) -> Building:
+def _pot_caramel(
+    origin: Coord, rotation: Direction, mirrored: bool = False
+) -> Building:
     return Assembler(
-        origin, _RECIPE_CARAMEL, rotation, sprite_base="structure_pot_caramel"
+        origin,
+        _RECIPE_CARAMEL,
+        rotation,
+        mirrored=mirrored,
+        sprite_base="structure_pot_caramel",
     )
 
 
-def _wrapper_candy(origin: Coord, rotation: Direction) -> Building:
+def _wrapper_candy(
+    origin: Coord, rotation: Direction, mirrored: bool = False
+) -> Building:
     return Assembler(
-        origin, _RECIPE_CANDY, rotation, sprite_base="structure_wrapper_candy"
+        origin,
+        _RECIPE_CANDY,
+        rotation,
+        mirrored=mirrored,
+        sprite_base="structure_wrapper_candy",
     )
 
 
