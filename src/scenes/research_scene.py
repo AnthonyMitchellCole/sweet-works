@@ -118,6 +118,15 @@ class ResearchScene(Scene):
 
         self._unsub_changed = None
 
+        # Return-to-game button (top-right). Mirrors the HUD's research
+        # pill in reverse: chevron glyph + label, with the same hover/
+        # press springs so the two screens feel stitched together.
+        self._return_btn_rect: pygame.Rect = pygame.Rect(0, 0, 0, 0)
+        self._return_btn_hover = AnimValue(value=0.0, speed=18.0)
+        self._return_btn_press = AnimValue(value=0.0, speed=22.0)
+        self._return_btn_hovered: bool = False
+        self._return_btn_prev_hover: bool = False
+
     # -- lifecycle ---------------------------------------------------------
 
     def on_enter(self) -> None:
@@ -225,12 +234,20 @@ class ResearchScene(Scene):
         over_menu = self.menu is not None and self.menu.rect() is not None and \
             self.menu.rect().collidepoint(mouse_pos)
 
+        self._update_return_button(dt, mouse_pos)
+
         for node in RESEARCH:
             self._card_reveal[node.id].update(dt)
             self._card_pulse[node.id].update(dt)
 
-        # Pick hover node (topmost match under cursor; menu blocks hovers).
-        self._hover_node = None if over_menu or self._drag_pan.active else self._find_node_at(mouse_pos)
+        # Pick hover node (topmost match under cursor; menu + the return
+        # button both swallow hovers so cards don't light up behind UI).
+        block_hover = (
+            over_menu
+            or self._drag_pan.active
+            or self._return_btn_hovered
+        )
+        self._hover_node = None if block_hover else self._find_node_at(mouse_pos)
 
         if self.tooltip is not None:
             if self._hover_node is not None and self._selected_node is None:
@@ -252,6 +269,33 @@ class ResearchScene(Scene):
 
         if self.fx is not None:
             pass  # fx updated/drawn per frame; no explicit tick required
+
+    def _update_return_button(
+        self, dt: float, mouse_pos: tuple[int, int]
+    ) -> None:
+        """Tick the return-to-game button's hover/press springs + click.
+
+        Uses the rect captured during the previous frame's render, just
+        like the HUD's research button, so the hit region always tracks
+        whatever layout the header produced.
+        """
+        assert self.game is not None
+        hover = (
+            self._return_btn_rect.w > 0
+            and self._return_btn_rect.collidepoint(mouse_pos)
+            and not self._closing
+        )
+        self._return_btn_hovered = hover
+        self._return_btn_hover.to(1.0 if hover else 0.0)
+        self._return_btn_hover.update(dt)
+        pressed_now = hover and self.game.input.mouse(1)
+        self._return_btn_press.to(1.0 if pressed_now else 0.0)
+        self._return_btn_press.update(dt)
+        if hover and not self._return_btn_prev_hover:
+            SFX.play("ui.hover")
+        if hover and self.game.input.mouse_released(1):
+            self._begin_close()
+        self._return_btn_prev_hover = hover
 
     def _pan_camera(self, dt: float) -> None:
         assert self.game is not None
@@ -379,6 +423,7 @@ class ResearchScene(Scene):
 
         self._render_header(surface, fade)
         self._render_legend(surface, fade)
+        self._render_return_button(surface, fade)
 
         if self.menu is not None:
             self.menu.render(surface)
@@ -769,7 +814,7 @@ class ResearchScene(Scene):
             "RESEARCH TREE", TYPE.h1, PALETTE.text_strong
         )
         sub = self.game.assets.render_text(
-            "Factory paused  ·  TAB / ESC to resume  ·  R to recenter  ·  scroll to zoom",
+            "Factory paused  ·  R to recenter  ·  scroll to zoom  ·  drag to pan",
             TYPE.caption,
             PALETTE.muted,
         )
@@ -827,6 +872,138 @@ class ResearchScene(Scene):
                 x += 16 + s.get_width() + gap
             layer.set_alpha(alpha)
             surface.blit(layer, rect.topleft)
+
+    def _render_return_button(
+        self, surface: pygame.Surface, fade: float
+    ) -> None:
+        """Pill-shaped "Return to Game" button in the top-right corner.
+
+        Mirrors the HUD's research pill (beveled + hover glow + hover
+        underline + press darken) but with a left-pointing chevron so
+        the direction of travel reads instantly.
+        """
+        assert self.game is not None
+        alpha = int(255 * fade)
+        if alpha <= 4:
+            self._return_btn_rect = pygame.Rect(0, 0, 0, 0)
+            return
+
+        pad = THEME.spacing.lg
+        label = self.game.assets.render_text(
+            "RETURN TO GAME", TYPE.label, PALETTE.text_strong
+        )
+        hint = self.game.assets.render_text(
+            "TAB", TYPE.label, PALETTE.muted
+        )
+        glyph_slot = 18
+        gap = 10
+        hint_gap = 8
+        hint_pad_x = 6
+        hint_w = hint.get_width() + hint_pad_x * 2
+        inner_w = (
+            glyph_slot + gap + label.get_width() + hint_gap + hint_w
+        )
+        btn_w = inner_w + pad * 2
+        btn_h = 36
+        w, _ = surface.get_size()
+        rect = pygame.Rect(w - btn_w - pad, pad, btn_w, btn_h)
+        self._return_btn_rect = rect
+
+        hover = self._return_btn_hover.value
+        press = self._return_btn_press.value
+
+        fill = lighten(PALETTE.bg_raised, 0.04 + 0.05 * hover)
+        border = lighten(PALETTE.primary, 0.05 * hover)
+
+        with acquired(rect.size) as layer:
+            local = pygame.Rect(0, 0, rect.w, rect.h)
+            beveled_panel(layer, local, fill=fill, border=border)
+
+            glow_a = int(28 + 56 * hover - 30 * press)
+            if glow_a > 0:
+                glow = pygame.Surface(rect.size, pygame.SRCALPHA)
+                glow.fill(with_alpha(PALETTE.primary, glow_a))
+                layer.blit(glow, (0, 0))
+
+            if press > 0.01:
+                dim = pygame.Surface(rect.size, pygame.SRCALPHA)
+                dim.fill(with_alpha(PALETTE.bg_deep, int(50 * press)))
+                layer.blit(dim, (0, 0))
+
+            # Accent stripe on the LEFT edge mirrors the header stripe
+            # and reinforces the "this is the way back" direction.
+            pygame.draw.rect(
+                layer, PALETTE.primary, pygame.Rect(0, 4, 4, rect.h - 8)
+            )
+
+            # Back chevron glyph, nudged on hover/press for a tactile feel.
+            chev_cx = 8 + glyph_slot // 2 + int(-3 * hover) - int(round(press * 1))
+            chev_cy = rect.h // 2
+            self._draw_back_chevron(
+                layer, (chev_cx, chev_cy), 7, PALETTE.primary
+            )
+
+            # Label.
+            label_x = 8 + glyph_slot + gap
+            label_y = (rect.h - label.get_height()) // 2 - int(round(press * 1))
+            layer.blit(label, (label_x, label_y))
+
+            # "TAB" hotkey hint chip on the right.
+            chip_x = label_x + label.get_width() + hint_gap
+            chip_y = (rect.h - 18) // 2
+            chip_rect = pygame.Rect(chip_x, chip_y, hint_w, 18)
+            pygame.draw.rect(
+                layer, with_alpha(PALETTE.line, 120), chip_rect
+            )
+            pygame.draw.rect(layer, PALETTE.line, chip_rect, 1)
+            layer.blit(
+                hint,
+                (
+                    chip_rect.x + (chip_rect.w - hint.get_width()) // 2,
+                    chip_rect.y + (chip_rect.h - hint.get_height()) // 2,
+                ),
+            )
+
+            if hover > 0.02:
+                ul_w = rect.w - 6
+                ul = pygame.Surface((ul_w, 2), pygame.SRCALPHA)
+                ul.fill(with_alpha(PALETTE.primary, int(200 * hover)))
+                layer.blit(ul, (3, rect.h - 3))
+
+            layer.set_alpha(alpha)
+            surface.blit(layer, rect.topleft)
+
+    @staticmethod
+    def _draw_back_chevron(
+        surface: pygame.Surface,
+        center: tuple[int, int],
+        size: int,
+        color: tuple[int, int, int],
+    ) -> None:
+        """Chunky left-pointing chevron glyph (two parallel strokes)."""
+        cx, cy = center
+        # Outer triangle-style chevron drawn with thick lines so it
+        # reads at any scale.
+        pygame.draw.lines(
+            surface,
+            color,
+            False,
+            [
+                (cx + size // 2, cy - size),
+                (cx - size // 2, cy),
+                (cx + size // 2, cy + size),
+            ],
+            3,
+        )
+        # A second, shorter stroke behind the first gives the glyph
+        # weight without an extra draw pass's worth of anti-aliasing.
+        pygame.draw.line(
+            surface,
+            color,
+            (cx - size // 2, cy),
+            (cx + size, cy),
+            2,
+        )
 
     # -- closing -----------------------------------------------------------
 
