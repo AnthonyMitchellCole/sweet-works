@@ -112,7 +112,7 @@ class Assembler(Building):
     def tick(self, world: World) -> None:
         if self._craft is None:
             if self._can_start_craft():
-                self._begin_craft()
+                self._begin_craft(world)
         else:
             self._craft.remaining -= 1
             if self._craft.remaining <= 0:
@@ -132,10 +132,15 @@ class Assembler(Building):
                 return False
         return True
 
-    def _begin_craft(self) -> None:
+    def _begin_craft(self, world: World) -> None:
         for item_type, qty in self.recipe.inputs:
             port = self._input_ports_by_type[item_type.type_id]
             port.drain_of_id(item_type.type_id, qty)
+            # Mirrors item.produced semantics: emit one event per unit so
+            # HUD rate trackers and any future telemetry see a consistent
+            # per-item stream for both ends of the recipe.
+            for _ in range(qty):
+                world.events.emit("item.consumed", item_type)
         self._craft = _Craft(remaining=self.recipe.ticks, total=self.recipe.ticks)
 
     def _finish_craft(self, world: World) -> None:

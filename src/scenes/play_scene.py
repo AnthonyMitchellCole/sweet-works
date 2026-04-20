@@ -249,7 +249,7 @@ class PlayScene(Scene):
                 self.world.tick()
 
         self.world.advance_time(dt)
-        self.hud.update(dt)
+        self.hud.update(dt, mouse_pos, self.world.time)
         self.hud.set_transform(self.cursor.rotation, self.cursor.mirrored)
 
     # -- render ------------------------------------------------------------
