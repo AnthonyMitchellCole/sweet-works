@@ -23,6 +23,7 @@ from ..world.tile import Coord
 
 if TYPE_CHECKING:
     from ..belts.network_soa import BeltNetworkSoA
+    from ..world.world import World
 
 
 _DIR_NAME: dict[Direction, str] = {
@@ -158,15 +159,19 @@ def _enumerate_ports(
     return tuple(rows)
 
 
-def for_miner(m: Miner) -> StructureInfo:
-    rate = miner_ipm(m.period_ticks)
+def for_miner(m: Miner, world: World | None = None) -> StructureInfo:
+    effective_period = m.effective_period_ticks(world)
+    rate = miner_ipm(effective_period)
     title = f"{m.item.name} Miner"
     subtitle = f"Miner - facing {_direction_word(m.rotation)}"
     if m.mirrored:
         subtitle += " (mirrored)"
+    cycle_label = f"{effective_period} ticks"
+    if effective_period != m.period_ticks:
+        cycle_label = f"{effective_period} ticks (base {m.period_ticks})"
     rate_rows = (
         InfoRow(label="Output", value=_fmt_rate(rate), item=m.item),
-        InfoRow(label="Cycle", value=f"{m.period_ticks} ticks"),
+        InfoRow(label="Cycle", value=cycle_label),
     )
     # Miner output ports are unfiltered -- surface the mined item so the
     # port bar in the menu can still colour it correctly.
@@ -194,8 +199,9 @@ def for_miner(m: Miner) -> StructureInfo:
     )
 
 
-def for_assembler(a: Assembler) -> StructureInfo:
-    cpm = assembler_cycles_per_minute(a.recipe.ticks)
+def for_assembler(a: Assembler, world: World | None = None) -> StructureInfo:
+    effective_ticks = a.effective_recipe_ticks(world)
+    cpm = assembler_cycles_per_minute(effective_ticks)
     primary_out = a.recipe.outputs[0][0] if a.recipe.outputs else None
     title = f"{primary_out.name} Assembler" if primary_out is not None else "Assembler"
     subtitle = f"Assembler - facing {_direction_word(a.rotation)}"
@@ -308,11 +314,11 @@ def for_belt(b: ConveyorBelt, net: BeltNetworkSoA | None) -> StructureInfo:
     )
 
 
-def for_building(b: Building) -> StructureInfo | None:
+def for_building(b: Building, world: World | None = None) -> StructureInfo | None:
     if isinstance(b, Miner):
-        return for_miner(b)
+        return for_miner(b, world)
     if isinstance(b, Assembler):
-        return for_assembler(b)
+        return for_assembler(b, world)
     return None
 
 

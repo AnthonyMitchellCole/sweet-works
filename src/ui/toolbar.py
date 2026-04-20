@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import pygame
 
+from ..audio.sfx import SFX
 from ..buildings.registry import BUILDINGS, BuildingPrefab
 from ..core import config
-from ..design.palette import PALETTE, lighten, with_alpha
+from ..design.palette import PALETTE, darken, lighten, with_alpha
 from ..design.theme import THEME
 from ..design.typography import TYPE
 from ..rendering.animation import Tween
@@ -21,6 +23,8 @@ from .widget import Widget
 
 if TYPE_CHECKING:
     from ..assets.loader import AssetLoader
+    from ..core.events import EventBus
+    from ..research.state import ResearchState
 
 
 SLOT_SIZE: int = 64
@@ -86,11 +90,22 @@ class Toolbar:
         slots: tuple[ToolSlot, ...] | None = None,
         on_select: Callable[[ToolSlot], None] | None = None,
         window_size: tuple[int, int] = (config.WINDOW_W, config.WINDOW_H),
+        research: ResearchState | None = None,
+        events: EventBus | None = None,
     ) -> None:
         self.assets = assets
         self.slots = slots or default_slots()
         self.on_select = on_select or (lambda _: None)
         self.selected_index: int = 0
+        self.research: ResearchState | None = research
+        # Lock pulse phase (driven by update dt) for the dashed halo.
+        self._lock_phase: float = 0.0
+        self._events = events
+        self._unsub_research = None
+        if events is not None:
+            self._unsub_research = events.on(
+                "research.changed", lambda **_: self._on_research_changed()
+            )
 
         # Live placement-transform state mirrored from the cursor so the
         # selected slot can render a rotation + mirror pip. Defaults keep
@@ -163,14 +178,50 @@ class Toolbar:
     def selected_slot(self) -> ToolSlot:
         return self.slots[self.selected_index]
 
+    def is_slot_unlocked(self, slot: ToolSlot) -> bool:
+        if self.research is None:
+            return True
+        if slot.prefab is not None:
+            return self.research.is_unlocked(slot.prefab.id)
+        # Non-prefab slots (pointer, belt) are always available.
+        return self.research.is_unlocked(slot.id)
+
     def select(self, index: int) -> None:
         index = max(0, min(len(self.slots) - 1, index))
         if index == self.selected_index:
+            return
+        slot = self.slots[index]
+        if not self.is_slot_unlocked(slot):
+            SFX.play("ui.error")
+            # Nudge the lock pulse so the halo flashes on rejection.
+            self._lock_phase += 2.0
             return
         self._widgets[self.selected_index].selected = False
         self.selected_index = index
         self._widgets[self.selected_index].selected = True
         self.on_select(self.selected_slot())
+
+    def _on_research_changed(self) -> None:
+        """If the live selection becomes somehow invalid, fall back to pointer.
+
+        Normally research only *unlocks* things, but this keeps the
+        invariant "selected slot is always unlocked" airtight.
+        """
+        slot = self.selected_slot()
+        if self.is_slot_unlocked(slot):
+            return
+        for i, s in enumerate(self.slots):
+            if self.is_slot_unlocked(s):
+                self._widgets[self.selected_index].selected = False
+                self.selected_index = i
+                self._widgets[i].selected = True
+                self.on_select(s)
+                return
+
+    def close(self) -> None:
+        if self._unsub_research is not None:
+            self._unsub_research()
+            self._unsub_research = None
 
     def set_transform(self, rotation: Direction, mirrored: bool) -> None:
         """Sync the rotation + mirror pip with the live placement cursor."""
@@ -180,6 +231,10 @@ class Toolbar:
     def handle_hotkey(self, key: int) -> bool:
         for i, slot in enumerate(self.slots):
             if slot.hotkey == key:
+                if not self.is_slot_unlocked(slot):
+                    SFX.play("ui.error")
+                    self._lock_phase += 2.0
+                    return True
                 self.select(i)
                 return True
         return False
@@ -195,6 +250,7 @@ class Toolbar:
     ) -> None:
         panel_y = self._slide.update(dt)
         dy = int(panel_y - self._panel_final_y)
+        self._lock_phase = (self._lock_phase + dt * 1.8) % 1000.0
         for i, w in enumerate(self._widgets):
             x = self._panel_x + PANEL_PAD + i * (SLOT_SIZE + SLOT_GAP)
             w.rect.topleft = (x, self._panel_final_y + PANEL_PAD + dy)
@@ -225,19 +281,22 @@ class Toolbar:
         hover = widget.hover_anim.value
         press = widget.press_anim.value
         scale = 1.0 + hover * 0.04 - press * 0.05
+        locked = not self.is_slot_unlocked(slot)
 
-        bg = PALETTE.bg_raised if not widget.selected else lighten(PALETTE.bg_raised, 0.08)
+        if locked:
+            bg = darken(PALETTE.bg_raised, 0.25)
+        else:
+            bg = PALETTE.bg_raised if not widget.selected else lighten(PALETTE.bg_raised, 0.08)
         beveled_panel(surface, rect, fill=bg, border=PALETTE.line)
 
-        if widget.selected:
+        if widget.selected and not locked:
             with acquired(rect.size) as glow:
                 glow.fill(with_alpha(PALETTE.primary, int(40 + 40 * hover)))
                 surface.blit(glow, rect.topleft)
             pygame.draw.rect(surface, PALETTE.primary, rect, 2)
-        elif hover > 0.02:
+        elif hover > 0.02 and not locked:
             pygame.draw.rect(surface, lighten(PALETTE.line, 0.2), rect, 1)
 
-        # Icon
         icon = self._icon_for(slot)
         if icon is not None:
             ix = rect.centerx - int(icon.get_width() * scale) // 2
@@ -248,17 +307,58 @@ class Toolbar:
                     max(1, int(icon.get_height() * scale)),
                 )
                 icon = pygame.transform.scale(icon, size)
-            surface.blit(icon, (ix, iy))
+            if locked:
+                # Desaturate: blend icon with grey via a darkened overlay.
+                tinted = icon.copy()
+                veil = pygame.Surface(tinted.get_size(), pygame.SRCALPHA)
+                veil.fill(with_alpha(PALETTE.bg_deep, 170))
+                tinted.blit(veil, (0, 0))
+                surface.blit(tinted, (ix, iy))
+            else:
+                surface.blit(icon, (ix, iy))
 
-        # Hotkey label (derived from the slot's pygame key name)
+        if locked:
+            self._draw_lock_glyph(surface, rect, hover)
+
         label = pygame.key.name(slot.hotkey).upper()
-        surf = self.assets.render_text(label, TYPE.label, PALETTE.muted)
+        label_color = PALETTE.line if locked else PALETTE.muted
+        surf = self.assets.render_text(label, TYPE.label, label_color)
         surface.blit(surf, (rect.x + 4, rect.y + 4))
 
-        # Rotation / mirror pip on the selected prefab slot so the user
-        # sees the live transform state without reading the ghost.
-        if widget.selected and slot.prefab is not None:
+        if widget.selected and slot.prefab is not None and not locked:
             self._draw_transform_pip(surface, rect)
+
+    def _draw_lock_glyph(
+        self, surface: pygame.Surface, rect: pygame.Rect, hover: float
+    ) -> None:
+        """Small padlock icon + soft pulsing halo in the slot's top-right."""
+        pulse = 0.5 + 0.5 * math.sin(self._lock_phase * math.tau)
+        halo_alpha = int(60 + 60 * pulse + hover * 60)
+        with acquired(rect.size) as glow:
+            pygame.draw.rect(
+                glow,
+                with_alpha(PALETTE.warning, max(0, min(255, halo_alpha))),
+                glow.get_rect(),
+                2,
+            )
+            surface.blit(glow, rect.topleft)
+
+        gx = rect.right - 12
+        gy = rect.top + 10
+        body = pygame.Rect(gx - 5, gy, 10, 8)
+        pygame.draw.rect(surface, PALETTE.warning, body)
+        pygame.draw.rect(surface, PALETTE.bg_deep, body, 1)
+        shackle = pygame.Rect(gx - 3, gy - 5, 6, 6)
+        pygame.draw.arc(
+            surface,
+            PALETTE.warning,
+            shackle,
+            math.pi * 0.1,
+            math.pi * 0.9,
+            2,
+        )
+        keyhole = pygame.Rect(gx - 1, gy + 2, 2, 4)
+        pygame.draw.rect(surface, PALETTE.bg_deep, keyhole)
 
     def _draw_transform_pip(self, surface: pygame.Surface, rect: pygame.Rect) -> None:
         """Tiny rotation chevron (plus mirror tick) in the slot's top-right."""
@@ -337,13 +437,39 @@ class Toolbar:
     def _draw_tooltip(
         self, surface: pygame.Surface, slot: ToolSlot, anchor: pygame.Rect
     ) -> None:
-        text = self.assets.render_text(slot.label, TYPE.caption, PALETTE.text_strong)
+        locked = not self.is_slot_unlocked(slot)
+        if locked:
+            node = (
+                self.research.research_node_unlocking(slot.prefab.id)
+                if self.research is not None and slot.prefab is not None
+                else None
+            )
+            sub = f"Requires research: {node.name}" if node is not None else "Requires research"
+            line1 = self.assets.render_text(
+                slot.label, TYPE.caption, PALETTE.text_strong
+            )
+            line2 = self.assets.render_text(sub, TYPE.label, PALETTE.warning)
+            text_w = max(line1.get_width(), line2.get_width())
+            text_h = line1.get_height() + line2.get_height() + 2
+        else:
+            line1 = self.assets.render_text(
+                slot.label, TYPE.caption, PALETTE.text_strong
+            )
+            line2 = None
+            text_w = line1.get_width()
+            text_h = line1.get_height()
+
         pad = THEME.spacing.sm
         rect = pygame.Rect(
-            anchor.centerx - text.get_width() // 2 - pad,
-            anchor.y - text.get_height() - pad * 2 - 4,
-            text.get_width() + pad * 2,
-            text.get_height() + pad,
+            anchor.centerx - text_w // 2 - pad,
+            anchor.y - text_h - pad * 2 - 4,
+            text_w + pad * 2,
+            text_h + pad,
         )
         beveled_panel(surface, rect, fill=PALETTE.bg_deep, border=PALETTE.line)
-        surface.blit(text, (rect.x + pad, rect.y + pad // 2))
+        surface.blit(line1, (rect.x + pad, rect.y + pad // 2))
+        if line2 is not None:
+            surface.blit(
+                line2,
+                (rect.x + pad, rect.y + pad // 2 + line1.get_height() + 2),
+            )

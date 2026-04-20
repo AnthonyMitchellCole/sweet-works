@@ -10,6 +10,8 @@ happening in the world, not just nominal recipe throughput.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -699,9 +701,16 @@ class _TTRow:
 
 
 class HUD:
-    def __init__(self, assets: AssetLoader, events: EventBus) -> None:
+    def __init__(
+        self,
+        assets: AssetLoader,
+        events: EventBus,
+        *,
+        on_open_research: Callable[[], None] | None = None,
+    ) -> None:
         self.assets = assets
         self.events = events
+        self.on_open_research = on_open_research
 
         tracked = (
             ITEMS.cocoa_bean,
@@ -729,6 +738,14 @@ class HUD:
         self._hovered_item_id: str | None = None
         self._prev_hovered_item_id: str | None = None
         self._tooltip = _HudTooltip(assets)
+
+        # Research-tree quick-open button (cogwheel glyph + label).
+        self._research_btn_rect: pygame.Rect = pygame.Rect(0, 0, 0, 0)
+        self._research_btn_hover = AnimValue(value=0.0, speed=18.0)
+        self._research_btn_press = AnimValue(value=0.0, speed=22.0)
+        self._research_btn_phase: float = 0.0
+        self._research_btn_hovered: bool = False
+        self._research_btn_prev_hover: bool = False
 
     def close(self) -> None:
         self._off_produced()
@@ -761,11 +778,35 @@ class HUD:
         dt: float,
         mouse_pos: tuple[int, int] | None = None,
         world_time: float = 0.0,
+        mouse_down: bool = False,
+        mouse_released: bool = False,
     ) -> None:
         for p in self._pulses.values():
             p.update(dt)
         for tracker in self._rates.values():
             tracker.tick_time(world_time)
+
+        # Research button hit-testing (uses last-rendered rect).
+        btn_hover = False
+        if (
+            self.on_open_research is not None
+            and mouse_pos is not None
+            and self._research_btn_rect.w > 0
+            and self._research_btn_rect.collidepoint(mouse_pos)
+        ):
+            btn_hover = True
+        self._research_btn_hovered = btn_hover
+        self._research_btn_hover.to(1.0 if btn_hover else 0.0)
+        self._research_btn_hover.update(dt)
+        self._research_btn_press.to(1.0 if (btn_hover and mouse_down) else 0.0)
+        self._research_btn_press.update(dt)
+        self._research_btn_phase += dt
+        if btn_hover and not self._research_btn_prev_hover:
+            SFX.play("ui.hover")
+        if btn_hover and mouse_released and self.on_open_research is not None:
+            SFX.play("ui.click")
+            self.on_open_research()
+        self._research_btn_prev_hover = btn_hover
 
         # Hover test against last-rendered cell rects.
         hovered: str | None = None
@@ -829,6 +870,17 @@ class HUD:
         pip_x = fps_x - THEME.spacing.lg - 24
         pip_y = rect.y + height // 2
         self._render_transform_pip(surface, pip_x, pip_y)
+
+        # Research quick-open button just left of the transform pip.
+        if self.on_open_research is not None:
+            btn_w = 120
+            btn_h = 30
+            btn_x = pip_x - 24 - btn_w
+            btn_y = rect.y + (height - btn_h) // 2
+            self._research_btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+            self._render_research_button(surface, self._research_btn_rect)
+        else:
+            self._research_btn_rect = pygame.Rect(0, 0, 0, 0)
 
         # Tooltip sits on top of everything in the HUD layer.
         if self._tooltip.visible:
@@ -911,6 +963,73 @@ class HUD:
         surface.blit(count_surf, (tx, ty))
 
         return tx + count_surf.get_width() + THEME.spacing.lg
+
+    def _render_research_button(
+        self, surface: pygame.Surface, rect: pygame.Rect
+    ) -> None:
+        """Beveled pill with a small cogwheel glyph + label."""
+        hover = self._research_btn_hover.value
+        press = self._research_btn_press.value
+
+        fill = lighten(PALETTE.bg_raised, 0.04 + 0.05 * hover)
+        border = lighten(PALETTE.primary, 0.05 * hover)
+        beveled_panel(surface, rect, fill=fill, border=border)
+
+        glow_a = int(28 + 48 * hover - 30 * press)
+        if glow_a > 0:
+            with acquired(rect.size) as glow:
+                glow.fill(with_alpha(PALETTE.primary, glow_a))
+                surface.blit(glow, rect.topleft)
+
+        if press > 0.01:
+            with acquired(rect.size) as dark:
+                dark.fill(with_alpha(PALETTE.bg_deep, int(50 * press)))
+                surface.blit(dark, rect.topleft)
+
+        pad = 8
+        gear_cx = rect.x + pad + 8
+        gear_cy = rect.centery
+        rot = self._research_btn_phase * (1.8 if hover > 0.01 else 0.6)
+        self._draw_gear(surface, (gear_cx, gear_cy), 7, rot, PALETTE.primary)
+
+        label_col = PALETTE.text_strong if hover > 0.1 else PALETTE.text_body
+        label = self.assets.render_text("RESEARCH", TYPE.label, label_col)
+        lx = gear_cx + 8 + (rect.right - (gear_cx + 8) - label.get_width()) // 2
+        ly = rect.centery - label.get_height() // 2 - int(round(press * 1))
+        surface.blit(label, (lx, ly))
+
+        # Subtle bottom accent line on hover, ties into the toolbar theme.
+        if hover > 0.02:
+            line_a = int(200 * hover)
+            with acquired((rect.w - 6, 2)) as ul:
+                ul.fill(with_alpha(PALETTE.primary, line_a))
+                surface.blit(
+                    ul,
+                    (rect.x + 3, rect.bottom - 3),
+                    special_flags=pygame.BLEND_PREMULTIPLIED,
+                )
+
+    @staticmethod
+    def _draw_gear(
+        surface: pygame.Surface,
+        center: tuple[int, int],
+        radius: int,
+        rot: float,
+        color: tuple[int, int, int],
+    ) -> None:
+        """Tiny procedural cogwheel glyph: 8 teeth + inner hub."""
+        cx, cy = center
+        teeth = 8
+        outer = radius
+        inner = max(2, radius - 3)
+        pts: list[tuple[float, float]] = []
+        for i in range(teeth * 2):
+            a = rot + (i * math.pi / teeth)
+            r = outer if (i % 2 == 0) else inner
+            pts.append((cx + math.cos(a) * r, cy + math.sin(a) * r))
+        pygame.draw.polygon(surface, color, [(int(x), int(y)) for x, y in pts])
+        pygame.draw.circle(surface, PALETTE.bg_deep, (cx, cy), max(2, radius - 4))
+        pygame.draw.circle(surface, color, (cx, cy), max(1, radius - 5), 1)
 
     def _render_transform_pip(
         self, surface: pygame.Surface, cx: int, cy: int

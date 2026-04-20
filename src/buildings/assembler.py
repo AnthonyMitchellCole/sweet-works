@@ -10,10 +10,13 @@ import pygame
 from ..core import config
 from ..design.palette import PALETTE, darken, lighten
 from ..items.item_type import ItemType
+from ..research.node import ModKey
 from ..world.direction import Direction
 from ..world.tile import Coord
 from .building import Building
 from .port import Port, PortKind
+
+BASE_PORT_CAPACITY: int = 8
 
 if TYPE_CHECKING:
     from ..assets.loader import AssetLoader
@@ -54,9 +57,37 @@ class Assembler(Building):
         self.recipe = recipe
         self._craft: _Craft | None = None
         self._input_ports_by_type: dict[int, Port] = {}
+        # Tracks the base assembler port capacity so research-driven port
+        # capacity bumps can be re-applied cleanly on ``research.changed``.
+        self._base_port_capacity: int = BASE_PORT_CAPACITY
         super().__init__(
             origin, rotation, mirrored=mirrored, sprite_base=sprite_base
         )
+
+    # -- research-aware rates ---------------------------------------------
+
+    def effective_recipe_ticks(self, world: World | None = None) -> int:
+        """Recipe ticks scaled by the ``ASSEMBLER_SPEED`` modifier."""
+        if world is not None and world.research is not None:
+            speed = max(1e-6, world.research.modifier(ModKey.ASSEMBLER_SPEED, 1.0))
+            return max(1, int(round(self.recipe.ticks / speed)))
+        return self.recipe.ticks
+
+    def apply_port_capacity(self, world: World | None) -> None:
+        """Re-size every port to ``base + PORT_CAPACITY`` research bonus.
+
+        Called on ``research.changed`` so earlier-placed assemblers pick
+        up new slots without needing to be rebuilt. Preserves existing
+        buffered items.
+        """
+        bonus = 0
+        if world is not None and world.research is not None:
+            bonus = int(round(world.research.modifier(ModKey.PORT_CAPACITY, 0.0)))
+        target = max(1, self._base_port_capacity + bonus)
+        for port in list(self.inputs) + list(self.outputs):
+            if port.capacity == target:
+                continue
+            _resize_port(port, target)
 
     # -- animation state hooks --------------------------------------------
 
@@ -88,13 +119,14 @@ class Assembler(Building):
         # edge at the top-right cell. The framework rotates / mirrors
         # these into world space.
         self._input_ports_by_type = {}
+        capacity = self._base_port_capacity
         for i, (item_type, _) in enumerate(self.recipe.inputs):
             port = self._add_local_port(
                 PortKind.INPUT,
                 side_local=Direction.W,
                 cell_offset_local=(0, min(i, self.footprint[1] - 1)),
                 filter=item_type,
-                capacity=8,
+                capacity=capacity,
             )
             self._input_ports_by_type[item_type.type_id] = port
 
@@ -104,7 +136,7 @@ class Assembler(Building):
                 side_local=Direction.E,
                 cell_offset_local=(self.footprint[0] - 1, 0),
                 filter=item_type,
-                capacity=8,
+                capacity=capacity,
             )
 
     # -- tick --------------------------------------------------------------
@@ -141,7 +173,8 @@ class Assembler(Building):
             # per-item stream for both ends of the recipe.
             for _ in range(qty):
                 world.events.emit("item.consumed", item_type)
-        self._craft = _Craft(remaining=self.recipe.ticks, total=self.recipe.ticks)
+        ticks = self.effective_recipe_ticks(world)
+        self._craft = _Craft(remaining=ticks, total=ticks)
 
     def _finish_craft(self, world: World) -> None:
         for item_type, qty in self.recipe.outputs:
@@ -204,3 +237,26 @@ class Assembler(Building):
                     lighten(PALETTE.primary, 0.25),
                     pygame.Rect(fill_rect.x, fill_rect.y, fill_rect.w, 1),
                 )
+
+
+def _resize_port(port: Port, new_capacity: int) -> None:
+    """Grow or shrink a port's ring buffer, preserving queued items.
+
+    Overflowing items on shrink are dropped from the tail (oldest
+    retained); this matches the forgiving rotate-drain behaviour in
+    :class:`Building`.
+    """
+    import numpy as np
+
+    if new_capacity == port.capacity:
+        return
+    snapshot = port.buffer
+    keep = min(new_capacity, len(snapshot))
+    new_buf = np.zeros(new_capacity, dtype=snapshot.dtype)
+    if keep > 0:
+        new_buf[:keep] = snapshot[:keep]
+    port.capacity = new_capacity
+    port._buf = new_buf
+    port._head = 0
+    port._tail = keep % new_capacity if new_capacity > 0 else 0
+    port._count = keep

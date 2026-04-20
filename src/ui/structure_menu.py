@@ -142,6 +142,10 @@ class StructureMenu:
         self._building: Building | None = None
         self._belt: ConveyorBelt | None = None
         self._belt_net: BeltNetworkSoA | None = None
+        # Optional world reference so :func:`for_building` can surface the
+        # effective (research-modified) rates. ``None`` yields base rates,
+        # which keeps unit tests working unchanged.
+        self._world = None
         self._info: StructureInfo | None = None
         self._window_size: tuple[int, int] = (0, 0)
         self._is_open: bool = False
@@ -543,10 +547,14 @@ class StructureMenu:
 
     def _compute_info(self) -> StructureInfo | None:
         if self._building is not None:
-            return for_building(self._building)
+            return for_building(self._building, self._world)
         if self._belt is not None:
             return for_belt(self._belt, self._belt_net)
         return None
+
+    def attach_world(self, world) -> None:
+        """Supply a :class:`World` so projected rates honour research."""
+        self._world = world
 
     def _compute_world_highlight(self) -> WorldHighlight | None:
         idx = self._hovered_port_index

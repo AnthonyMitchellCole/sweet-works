@@ -13,6 +13,7 @@ from .tile import Coord, Tile
 if TYPE_CHECKING:
     from ..belts.network_soa import BeltNetworkSoA
     from ..buildings.building import Building
+    from ..research.state import ResearchState
 
 
 class World:
@@ -23,6 +24,9 @@ class World:
         self._building_cells: dict[Coord, Building] = {}
         self.belt_network: BeltNetworkSoA | None = None
         self.time: float = 0.0
+        # Research state is attached by ``PlayScene`` so the sim stays
+        # agnostic when ``World`` is used outside gameplay (tests, demos).
+        self.research: ResearchState | None = None
 
     # -- queries -----------------------------------------------------------
 

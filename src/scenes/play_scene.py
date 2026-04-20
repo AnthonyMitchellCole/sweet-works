@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 import pygame
 
 from ..audio.sfx import SFX
@@ -13,13 +11,14 @@ from ..buildings.building import Building
 from ..buildings.registry import BUILDINGS, BuildingPrefab
 from ..core import config
 from ..core.perf import PERF, timed
-from ..design.palette import PALETTE, with_alpha
+from ..design.palette import PALETTE
 from ..design.typography import TYPE
 from ..rendering.animation import AnimValue
-from ..rendering.pool import acquired
 from ..rendering.renderer import Renderer
+from ..research.state import ResearchState
 from ..ui import info as info_mod
 from ..ui.cursor import PlacementCursor
+from ..ui.drag_pan import DragPanController
 from ..ui.hover_highlight import draw_hover_brackets
 from ..ui.hud import HUD
 from ..ui.perf_hud import PerfHUD
@@ -31,6 +30,7 @@ from ..ui.tooltip import WorldTooltip
 from ..world.camera import Camera
 from ..world.direction import Direction
 from ..world.world import World
+from .research_scene import ResearchScene
 from .scene import Scene
 
 PAN_KEYS = {
@@ -59,6 +59,7 @@ class PlayScene(Scene):
         self.menu: StructureMenu | None = None
         self.studio: SpriteStudio | None = None
         self.fx: PlacementFx | None = None
+        self.research: ResearchState | None = None
 
         # Hover state and fade
         self._hover_building: Building | None = None
@@ -67,11 +68,8 @@ class PlayScene(Scene):
         self._hover_footprint: tuple[int, int] = (1, 1)
         self._hover_strength = AnimValue(value=0.0, target=0.0, speed=14.0)
 
-        # Middle-mouse drag-pan state.
-        self._drag_active: bool = False
-        self._drag_vel: tuple[float, float] = (0.0, 0.0)
-        self._drag_strength = AnimValue(value=0.0, target=0.0, speed=16.0)
-        self._drag_cursor_applied: bool = False
+        self._drag_pan = DragPanController()
+        self._unsub_research: object = None
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -80,19 +78,34 @@ class PlayScene(Scene):
         window_size = self.game.window_size
         self.world = World(self.game.events)
         self.world.belt_network = BeltNetworkSoA()
+        self.research = ResearchState(self.game.events)
+        self.world.research = self.research
+        # Re-apply port capacity bumps to every assembler when research
+        # changes; placement-time sizing is handled by ``_configure_ports``.
+        self._unsub_research = self.game.events.on(
+            "research.changed",
+            lambda **_: self._apply_research_capacity(),
+        )
         self.camera = Camera(window_size)
         self.renderer = Renderer(self.game.assets)
-        self.hud = HUD(self.game.assets, self.game.events)
+        self.hud = HUD(
+            self.game.assets,
+            self.game.events,
+            on_open_research=self._open_research_tree,
+        )
         self.perf_hud = PerfHUD(self.game.assets)
         self.toolbar = Toolbar(
             self.game.assets,
             on_select=self._on_tool_select,
             window_size=window_size,
+            research=self.research,
+            events=self.game.events,
         )
         self.cursor = PlacementCursor(self.game.assets)
         self.cursor.set_tool(self.toolbar.selected_slot())
         self.tooltip = WorldTooltip(self.game.assets)
         self.menu = StructureMenu(self.game.assets)
+        self.menu.attach_world(self.world)
         self.menu.layout(window_size)
         self.studio = SpriteStudio(self.game.assets)
         self.studio.layout(window_size)
@@ -109,7 +122,13 @@ class PlayScene(Scene):
     def on_exit(self) -> None:
         if self.hud is not None:
             self.hud.close()
-        self._release_drag_cursor()
+        self._drag_pan.release()
+        if self._unsub_research is not None:
+            try:
+                self._unsub_research()
+            except Exception:
+                pass
+            self._unsub_research = None
 
     def on_resize(self, size: tuple[int, int]) -> None:
         if self.camera is not None:
@@ -138,6 +157,8 @@ class PlayScene(Scene):
 
                 SFX.play("ui.close")
                 self.game.replace_scene(MenuScene())
+            elif event.key == pygame.K_TAB:
+                self._open_research_tree()
             elif event.key == pygame.K_r and self.cursor is not None:
                 self._rotate_at_cursor()
             elif event.key == pygame.K_t and self.cursor is not None:
@@ -164,10 +185,9 @@ class PlayScene(Scene):
         assert self.tooltip is not None
         assert self.menu is not None
 
-        self._update_drag_pan(dt)
+        self._drag_pan.update(dt, self.game.input, self.camera)
         self._pan_camera(dt)
         self.camera.update(dt)
-        self._drag_strength.update(dt)
 
         mouse_pos = self.game.input.mouse_pos
         over_ui = self._point_over_ui(mouse_pos)
@@ -198,7 +218,7 @@ class PlayScene(Scene):
         tip_info = None
         if show_tooltip:
             if self._hover_building is not None:
-                tip_info = info_mod.for_building(self._hover_building)
+                tip_info = info_mod.for_building(self._hover_building, self.world)
             elif self._hover_belt is not None:
                 tip_info = info_mod.for_belt(
                     self._hover_belt, self.world.belt_network
@@ -233,7 +253,7 @@ class PlayScene(Scene):
         # LMB/RMB dispatch is suppressed while middle-mouse panning is active,
         # or while the studio is open (otherwise clicks beneath it would
         # place/delete buildings in the world).
-        if not over_ui and not self._drag_active and not studio_open:
+        if not over_ui and not self._drag_pan.active and not studio_open:
             if self.game.input.mouse_pressed(1):
                 self._on_lmb(tile_pos, is_pointer)
             if self.game.input.mouse_pressed(3) and not is_pointer:
@@ -249,7 +269,18 @@ class PlayScene(Scene):
                 self.world.tick()
 
         self.world.advance_time(dt)
-        self.hud.update(dt, mouse_pos, self.world.time)
+        # HUD needs mouse state so its research-tree button can hit-test.
+        # Suppress button dispatch while the studio is open so its
+        # overlay clicks never bleed through the HUD beneath.
+        hud_mouse_down = self.game.input.mouse(1) and not studio_open
+        hud_mouse_released = self.game.input.mouse_released(1) and not studio_open
+        self.hud.update(
+            dt,
+            mouse_pos,
+            self.world.time,
+            mouse_down=hud_mouse_down,
+            mouse_released=hud_mouse_released,
+        )
         self.hud.set_transform(self.cursor.rotation, self.cursor.mirrored)
 
     # -- render ------------------------------------------------------------
@@ -277,7 +308,9 @@ class PlayScene(Scene):
         self._render_hover_brackets(surface)
 
         self.cursor.render(surface, self.camera)
-        self._render_drag_indicator(surface)
+        self._drag_pan.render_indicator(
+            surface, self.game.input.mouse_pos, self.world.time
+        )
         self.hud.render(surface, self.game.clock.fps)
         self.toolbar.render(surface)
         self.menu.render(surface)
@@ -309,99 +342,32 @@ class PlayScene(Scene):
         speed = config.CAMERA_PAN_SPEED * dt / max(0.5, self.camera.zoom)
         self.camera.pan(nx * speed, ny * speed)
 
-    def _update_drag_pan(self, dt: float) -> None:
-        """Middle-mouse drag panning with 1:1 tracking and inertia on release."""
-        assert self.game is not None
-        assert self.camera is not None
-        inp = self.game.input
-
-        if inp.mouse_pressed(2):
-            self._drag_active = True
-            self._drag_vel = (0.0, 0.0)
-            self._drag_strength.to(1.0)
-            self._apply_drag_cursor()
-
-        if inp.mouse_released(2) and self._drag_active:
-            self._drag_active = False
-            self._drag_strength.to(0.0)
-            self._release_drag_cursor()
-
-        zoom = max(1e-4, self.camera.zoom)
-
-        if self._drag_active:
-            mx, my = inp.mouse_motion
-            if mx != 0 or my != 0:
-                wx = -mx / zoom
-                wy = -my / zoom
-                self.camera.pan_instant(wx, wy)
-                if dt > 1e-6:
-                    a = config.CAMERA_DRAG_VEL_EMA
-                    new_vx = wx / dt
-                    new_vy = wy / dt
-                    self._drag_vel = (
-                        self._drag_vel[0] * (1.0 - a) + new_vx * a,
-                        self._drag_vel[1] * (1.0 - a) + new_vy * a,
-                    )
-            return
-
-        vx, vy = self._drag_vel
-        speed = (vx * vx + vy * vy) ** 0.5
-        if speed <= config.CAMERA_DRAG_MIN_SPEED:
-            if speed > 0.0:
-                self._drag_vel = (0.0, 0.0)
-            return
-        self.camera.pan_instant(vx * dt, vy * dt)
-        decay = math.exp(-config.CAMERA_DRAG_INERTIA_DECAY * dt)
-        self._drag_vel = (vx * decay, vy * decay)
-
-    def _apply_drag_cursor(self) -> None:
-        if self._drag_cursor_applied:
-            return
-        try:
-            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_SIZEALL)
-            self._drag_cursor_applied = True
-        except (pygame.error, AttributeError, TypeError):
-            pass
-
-    def _release_drag_cursor(self) -> None:
-        if not self._drag_cursor_applied:
-            return
-        try:
-            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
-        except (pygame.error, AttributeError, TypeError):
-            pass
-        self._drag_cursor_applied = False
-
-    def _render_drag_indicator(self, surface: pygame.Surface) -> None:
-        """Soft pulsing ring at the mouse while middle-drag panning."""
-        assert self.game is not None
-        s = self._drag_strength.value
-        if s <= 0.02:
-            return
-        mx, my = self.game.input.mouse_pos
-        t = self.world.time if self.world is not None else 0.0
-        pulse = 0.5 + 0.5 * math.sin(t * 5.5)
-        radius = int(round(14 + 5 * pulse))
-        ring_alpha = int(round(170 * s))
-        glow_alpha = int(round(55 * s * (0.6 + 0.4 * pulse)))
-        d = radius * 2 + 8
-        with acquired((d, d)) as overlay:
-            c = (d // 2, d // 2)
-            pygame.draw.circle(
-                overlay, with_alpha(PALETTE.primary, glow_alpha), c, radius + 3
-            )
-            pygame.draw.circle(
-                overlay, with_alpha(PALETTE.primary, ring_alpha), c, radius, 2
-            )
-            pygame.draw.circle(
-                overlay, with_alpha(PALETTE.text_strong, int(ring_alpha * 0.55)), c, 2
-            )
-            surface.blit(overlay, (mx - d // 2, my - d // 2))
-
     def _on_tool_select(self, slot: ToolSlot) -> None:
         if self.cursor is not None:
             self.cursor.set_tool(slot)
         SFX.play("world.tool_select")
+
+    def _open_research_tree(self) -> None:
+        """Push the research-tree overlay onto the scene stack."""
+        assert self.game is not None
+        if self.research is None:
+            return
+        self._drag_pan.release()
+        self.game.push_scene(ResearchScene(self.research))
+
+    def _apply_research_capacity(self) -> None:
+        """Resize assembler ports in response to a ``research.changed`` event.
+
+        Only assemblers carry research-driven port capacity today; other
+        buildings are no-ops. The world reference is looked up lazily so
+        this stays safe if the hook fires after ``on_exit``.
+        """
+        if self.world is None:
+            return
+        for b in self.world.buildings:
+            apply = getattr(b, "apply_port_capacity", None)
+            if callable(apply):
+                apply(self.world)
 
     def _rotate_at_cursor(self) -> None:
         """Rotate an existing building under the cursor, otherwise the ghost."""
@@ -468,7 +434,9 @@ class PlayScene(Scene):
         for w in self.toolbar._widgets:
             if w.rect.collidepoint(pos):
                 return True
-        # HUD top bar (padding + 48 h)
+        # HUD top bar (padding + 48 h). The research quick-open button
+        # rides in this band too, so blocking world interaction here
+        # doubles as its click-guard.
         if pos[1] < 16 + 48 + 8:
             return True
         # Selected-structure menu occupies its own rect. The menu is

@@ -52,9 +52,17 @@ class MenuScene(Scene):
         # Reveal stagger: each item's per-row tween driven by self._t after on_enter.
         self._reveal_t0: float = 0.0
 
-        # Falling-sprinkle particles. Each sprinkle has (x_norm, phase, hue_idx,
-        # rotation, speed). Positions are expressed as normalised floats so the
-        # layer survives window resizes without reshuffling.
+        # Falling-sprinkle particles. Positions are normalised floats so
+        # the layer survives window resizes without reshuffling.
+        #
+        # Per-sprinkle tuple:
+        #   0: x_norm  - 0..1 horizontal seed
+        #   1: phase   - 0..1, evenly spread so the column never clumps
+        #                (``(i + rand)/count`` ensures continuous fall)
+        #   2: hue_idx - index into ``_sprinkle_hues``
+        #   3: rot     - base rotation of the short line segment
+        #   4: speed   - fall speed (px/s)
+        #   5: depth   - 0..1 parallax factor (size + alpha + drift)
         rng = random.Random(0xCA11D1)
         self._sprinkle_hues = (
             PALETTE.primary,
@@ -63,15 +71,19 @@ class MenuScene(Scene):
             PALETTE.warning,
             PALETTE.sugar_crystal,
         )
-        self._sprinkles: list[tuple[float, float, int, float, float]] = [
+        _SPRINKLE_COUNT = 44
+        self._sprinkles: list[
+            tuple[float, float, int, float, float, float]
+        ] = [
             (
                 rng.random(),
-                rng.random(),
+                (i + rng.random()) / _SPRINKLE_COUNT,
                 rng.randrange(len(self._sprinkle_hues)),
                 rng.uniform(0.0, math.pi * 2),
-                rng.uniform(14.0, 22.0),
+                rng.uniform(14.0, 26.0),
+                rng.uniform(0.35, 1.0),
             )
-            for _ in range(14)
+            for i in range(_SPRINKLE_COUNT)
         ]
 
     # -- lifecycle ---------------------------------------------------------
@@ -207,27 +219,35 @@ class MenuScene(Scene):
         self._render_sprinkles(surface)
 
     def _render_sprinkles(self, surface: pygame.Surface) -> None:
+        """Continuous, lightly-parallaxed rain of sprinkles.
+
+        Depth drives size, alpha, and drift amplitude so the far pieces
+        sit quietly in the back while the near pieces pop -- the effect
+        reads as layered rain instead of uniform noise, which keeps the
+        menu title and items comfortably legible.
+        """
         w, h = surface.get_size()
-        for x_norm, phase, hue_idx, rot, speed in self._sprinkles:
-            # Vertical drift: phase + t*speed wraps [0, h + 20).
-            y = ((phase * (h + 20) + self._t * speed) % (h + 20)) - 10
-            # Gentle sinusoidal x jitter so they don't fall in straight lines.
-            jitter = math.sin(self._t * 0.8 + rot) * 8
+        span = h + 20
+        for x_norm, phase, hue_idx, rot, speed, depth in self._sprinkles:
+            y = ((phase * span + self._t * speed) % span) - 10
+            jitter = math.sin(self._t * 0.8 + rot) * (5.0 + 6.0 * depth)
             x = x_norm * w + jitter
             color = self._sprinkle_hues[hue_idx]
-            alpha = 70
+            alpha = int(35 + 55 * depth)  # 35..90; far < near, never overpowers
             angle = rot + self._t * 1.5
-            dx = math.cos(angle) * 3
-            dy = math.sin(angle) * 3
-            with acquired((7, 7)) as surf:
+            half = 2.0 + 1.8 * depth       # 2..3.8 px half-length
+            dx = math.cos(angle) * half
+            dy = math.sin(angle) * half
+            width = 2 if depth > 0.55 else 1
+            with acquired((9, 9)) as surf:
                 pygame.draw.line(
                     surf,
                     with_alpha(color, alpha),
-                    (int(round(3 - dx / 2)), int(round(3 - dy / 2))),
-                    (int(round(3 + dx / 2)), int(round(3 + dy / 2))),
-                    2,
+                    (int(round(4 - dx)), int(round(4 - dy))),
+                    (int(round(4 + dx)), int(round(4 + dy))),
+                    width,
                 )
-                surface.blit(surf, (int(x) - 3, int(y) - 3))
+                surface.blit(surf, (int(x) - 4, int(y) - 4))
 
     def _render_title(self, surface: pygame.Surface) -> None:
         assert self.game is not None
