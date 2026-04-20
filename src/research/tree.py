@@ -1,8 +1,20 @@
 """Canonical research tree contents.
 
-The shape is authored as a 5-column, 3-ish-row grid spanning four
-categories (*Extraction / Processing / Packaging / Logistics*). The
-scene multiplies :attr:`ResearchNode.grid_pos` by a node stride to
+The shape is authored as a 5-column grid banded by category so that
+sibling branches never share a row with their own parent:
+
+* Row 0 - Extraction roots (``sugar_harvest``, ``dairy_extraction``)
+* Row 1 - Extraction modifiers (``rapid_extraction_i/ii``)
+* Row 2 - Processing unlocks (``refined_mixing``, ``caramel_crafting``)
+* Row 3 - Processing modifier + Packaging (``precision_assembly``,
+  ``wrapping_tech``)
+* Row 4 - Logistics chain (``larger_buffers`` -> ``belt_tuning``)
+
+Separating the rows this way prevents a connector edge from running
+through an unrelated card (e.g. ``sugar_harvest -> rapid_extraction_i``
+used to cut straight through ``refined_mixing`` on the same row).
+
+The scene multiplies :attr:`ResearchNode.grid_pos` by a node stride to
 lay the cards out on the pan/zoom board.
 
 Starting buildings (``extractor_cocoa``, ``belt``, ``pointer``) are
@@ -15,7 +27,7 @@ from __future__ import annotations
 from .node import Effect, ModKey, ResearchNode
 
 RESEARCH: tuple[ResearchNode, ...] = (
-    # -- Column 0: starting tier -----------------------------------------
+    # -- Row 0: Extraction roots -----------------------------------------
     ResearchNode(
         id="sugar_harvest",
         name="Sugar Harvest",
@@ -32,54 +44,19 @@ RESEARCH: tuple[ResearchNode, ...] = (
         name="Dairy Extraction",
         blurb="Tap underground reservoirs of fresh milk with reinforced pumping wells.",
         category="Extraction",
-        grid_pos=(0, 1),
+        grid_pos=(1, 0),
         prereqs=(),
         effects=(Effect.unlock("well_milk"),),
         icon_building_id="well_milk",
         icon_item_id="milk",
     ),
-    # -- Column 1: first processing tier ---------------------------------
-    ResearchNode(
-        id="refined_mixing",
-        name="Refined Mixing",
-        blurb="Stir cocoa into luscious, uniform chocolate using tempered mixer drums.",
-        category="Processing",
-        grid_pos=(1, 0),
-        prereqs=("sugar_harvest",),
-        effects=(Effect.unlock("mixer_chocolate"),),
-        icon_building_id="mixer_chocolate",
-        icon_item_id="chocolate",
-    ),
-    ResearchNode(
-        id="caramel_crafting",
-        name="Caramel Crafting",
-        blurb="Boil sugar and milk into rich, golden caramel inside insulated pots.",
-        category="Processing",
-        grid_pos=(1, 1),
-        prereqs=("sugar_harvest", "dairy_extraction"),
-        effects=(Effect.unlock("pot_caramel"),),
-        icon_building_id="pot_caramel",
-        icon_item_id="caramel",
-    ),
-    # -- Column 2: packaging tier ----------------------------------------
-    ResearchNode(
-        id="wrapping_tech",
-        name="Wrapping Technology",
-        blurb="Combine chocolate and caramel into beautifully wrapped finished candy bars.",
-        category="Packaging",
-        grid_pos=(2, 1),
-        prereqs=("refined_mixing", "caramel_crafting"),
-        effects=(Effect.unlock("wrapper_candy"),),
-        icon_building_id="wrapper_candy",
-        icon_item_id="candy_bar",
-    ),
-    # -- Row: extraction modifiers (top row) -----------------------------
+    # -- Row 1: Extraction modifiers -------------------------------------
     ResearchNode(
         id="rapid_extraction_i",
         name="Rapid Extraction I",
         blurb="Auto-lubricated drill shafts let every extractor cycle a tick faster.",
         category="Extraction",
-        grid_pos=(2, 0),
+        grid_pos=(2, 1),
         prereqs=("sugar_harvest",),
         effects=(Effect.modifier(ModKey.MINER_SPEED, 0.15),),
         icon_item_id="cocoa_bean",
@@ -90,31 +67,65 @@ RESEARCH: tuple[ResearchNode, ...] = (
         name="Rapid Extraction II",
         blurb="Hardened bits and pressurised feeds push miner throughput another notch.",
         category="Extraction",
-        grid_pos=(3, 0),
+        grid_pos=(3, 1),
         prereqs=("rapid_extraction_i",),
         effects=(Effect.modifier(ModKey.MINER_SPEED, 0.15),),
         icon_item_id="sugar_crystal",
         tags=("modifier",),
     ),
-    # -- Row: processing modifier ----------------------------------------
+    # -- Row 2: Processing unlocks ---------------------------------------
+    ResearchNode(
+        id="refined_mixing",
+        name="Refined Mixing",
+        blurb="Stir cocoa into luscious, uniform chocolate using tempered mixer drums.",
+        category="Processing",
+        grid_pos=(1, 2),
+        prereqs=("sugar_harvest",),
+        effects=(Effect.unlock("mixer_chocolate"),),
+        icon_building_id="mixer_chocolate",
+        icon_item_id="chocolate",
+    ),
+    ResearchNode(
+        id="caramel_crafting",
+        name="Caramel Crafting",
+        blurb="Boil sugar and milk into rich, golden caramel inside insulated pots.",
+        category="Processing",
+        grid_pos=(2, 2),
+        prereqs=("sugar_harvest", "dairy_extraction"),
+        effects=(Effect.unlock("pot_caramel"),),
+        icon_building_id="pot_caramel",
+        icon_item_id="caramel",
+    ),
+    # -- Row 3: Processing modifier + Packaging --------------------------
     ResearchNode(
         id="precision_assembly",
         name="Precision Assembly",
         blurb="Calibrated servo arms shave idle frames off every assembler's recipe.",
         category="Processing",
-        grid_pos=(3, 1),
+        grid_pos=(2, 3),
         prereqs=("refined_mixing",),
         effects=(Effect.modifier(ModKey.ASSEMBLER_SPEED, 0.20),),
         icon_item_id="chocolate",
         tags=("modifier",),
     ),
-    # -- Row: logistics --------------------------------------------------
+    ResearchNode(
+        id="wrapping_tech",
+        name="Wrapping Technology",
+        blurb="Combine chocolate and caramel into beautifully wrapped finished candy bars.",
+        category="Packaging",
+        grid_pos=(3, 3),
+        prereqs=("refined_mixing", "caramel_crafting"),
+        effects=(Effect.unlock("wrapper_candy"),),
+        icon_building_id="wrapper_candy",
+        icon_item_id="candy_bar",
+    ),
+    # -- Row 4: Logistics chain ------------------------------------------
     ResearchNode(
         id="larger_buffers",
         name="Larger Buffers",
         blurb="Reinforce every port with an extra hopper slot to smooth throughput bursts.",
         category="Logistics",
-        grid_pos=(3, 2),
+        grid_pos=(3, 4),
         prereqs=("caramel_crafting",),
         effects=(Effect.modifier(ModKey.PORT_CAPACITY, 1.0),),
         icon_item_id="caramel",
@@ -125,7 +136,7 @@ RESEARCH: tuple[ResearchNode, ...] = (
         name="Belt Tuning",
         blurb="Low-friction rollers nudge belt throughput up across the entire network.",
         category="Logistics",
-        grid_pos=(4, 2),
+        grid_pos=(4, 4),
         prereqs=("larger_buffers",),
         effects=(Effect.modifier(ModKey.BELT_THROUGHPUT, 0.25),),
         icon_item_id="candy_bar",
