@@ -20,7 +20,9 @@ from ..ui import info as info_mod
 from ..ui.cursor import PlacementCursor
 from ..ui.drag_pan import DragPanController
 from ..ui.hover_highlight import draw_hover_brackets
+from ..stats import ObjectivesState, StatsTracker
 from ..ui.hud import HUD
+from ..ui.objectives_window import ObjectivesWindow
 from ..ui.perf_hud import PerfHUD
 from ..ui.placement_fx import PlacementFx
 from ..ui.sprite_studio import SpriteStudio
@@ -60,6 +62,9 @@ class PlayScene(Scene):
         self.studio: SpriteStudio | None = None
         self.fx: PlacementFx | None = None
         self.research: ResearchState | None = None
+        self.stats: StatsTracker | None = None
+        self.objectives: ObjectivesState | None = None
+        self.objectives_window: ObjectivesWindow | None = None
 
         # Hover state and fade
         self._hover_building: Building | None = None
@@ -88,10 +93,17 @@ class PlayScene(Scene):
         )
         self.camera = Camera(window_size)
         self.renderer = Renderer(self.game.assets)
+        # Centralized stats + objectives live for the duration of the
+        # play session and own their own EventBus subscriptions.
+        self.stats = StatsTracker(self.game.events, self.world)
+        self.world.stats = self.stats
+        self.objectives = ObjectivesState(self.game.events, self.stats)
         self.hud = HUD(
             self.game.assets,
             self.game.events,
             on_open_research=self._open_research_tree,
+            on_open_objectives=self._open_objectives,
+            stats=self.stats,
         )
         self.perf_hud = PerfHUD(self.game.assets)
         self.toolbar = Toolbar(
@@ -109,6 +121,9 @@ class PlayScene(Scene):
         self.menu.layout(window_size)
         self.studio = SpriteStudio(self.game.assets)
         self.studio.layout(window_size)
+        self.objectives_window = ObjectivesWindow(self.game.assets)
+        self.objectives_window.attach(self.stats, self.objectives)
+        self.objectives_window.layout(window_size)
         self.fx = PlacementFx()
 
         self.camera.set_center(6 * config.TILE, 4 * config.TILE)
@@ -122,6 +137,12 @@ class PlayScene(Scene):
     def on_exit(self) -> None:
         if self.hud is not None:
             self.hud.close()
+        if self.objectives_window is not None:
+            self.objectives_window.close_subscriptions()
+        if self.objectives is not None:
+            self.objectives.close()
+        if self.stats is not None:
+            self.stats.close()
         self._drag_pan.release()
         if self._unsub_research is not None:
             try:
@@ -139,6 +160,8 @@ class PlayScene(Scene):
             self.menu.layout(size)
         if self.studio is not None:
             self.studio.layout(size)
+        if self.objectives_window is not None:
+            self.objectives_window.layout(size)
 
     # -- events ------------------------------------------------------------
 
@@ -147,6 +170,14 @@ class PlayScene(Scene):
         # The Sprite Studio takes priority so its clicks never leak to
         # the world or the structure menu beneath it.
         if self.studio is not None and self.studio.handle_event(event):
+            return
+        # Objectives window sits below the sprite studio so F4 wins when
+        # both are open, but above the structure menu / world so J and
+        # scroll-in-panel don't bleed into the map.
+        if (
+            self.objectives_window is not None
+            and self.objectives_window.handle_event(event)
+        ):
             return
         # Let the structure menu intercept ESC / its own keys first.
         if self.menu is not None and self.menu.handle_event(event):
@@ -159,6 +190,8 @@ class PlayScene(Scene):
                 self.game.replace_scene(MenuScene())
             elif event.key == pygame.K_TAB:
                 self._open_research_tree()
+            elif event.key == pygame.K_j and self.objectives_window is not None:
+                self.objectives_window.toggle()
             elif event.key == pygame.K_r and self.cursor is not None:
                 self._rotate_at_cursor()
             elif event.key == pygame.K_t and self.cursor is not None:
@@ -248,12 +281,29 @@ class PlayScene(Scene):
                 self.game.input.mouse_released(1),
             )
 
+        # Objectives / stats overlay update.
+        if self.objectives_window is not None:
+            self.objectives_window.update(
+                dt,
+                mouse_pos,
+                self.game.input.mouse(1),
+                self.game.input.mouse_released(1),
+            )
+
         studio_open = self.studio is not None and self.studio.is_open
+        objectives_open = (
+            self.objectives_window is not None and self.objectives_window.is_open
+        )
 
         # LMB/RMB dispatch is suppressed while middle-mouse panning is active,
         # or while the studio is open (otherwise clicks beneath it would
         # place/delete buildings in the world).
-        if not over_ui and not self._drag_pan.active and not studio_open:
+        if (
+            not over_ui
+            and not self._drag_pan.active
+            and not studio_open
+            and not objectives_open
+        ):
             if self.game.input.mouse_pressed(1):
                 self._on_lmb(tile_pos, is_pointer)
             if self.game.input.mouse_pressed(3) and not is_pointer:
@@ -269,11 +319,20 @@ class PlayScene(Scene):
                 self.world.tick()
 
         self.world.advance_time(dt)
+
+        # Stats + objectives rely on world time; update them after the
+        # sim step so their ring buffers reflect the just-produced items.
+        if self.stats is not None:
+            self.stats.update(dt, self.world.time)
+        if self.objectives is not None:
+            self.objectives.update(dt, self.world.time)
+
         # HUD needs mouse state so its research-tree button can hit-test.
         # Suppress button dispatch while the studio is open so its
         # overlay clicks never bleed through the HUD beneath.
-        hud_mouse_down = self.game.input.mouse(1) and not studio_open
-        hud_mouse_released = self.game.input.mouse_released(1) and not studio_open
+        suppress_hud = studio_open or objectives_open
+        hud_mouse_down = self.game.input.mouse(1) and not suppress_hud
+        hud_mouse_released = self.game.input.mouse_released(1) and not suppress_hud
         self.hud.update(
             dt,
             mouse_pos,
@@ -318,10 +377,19 @@ class PlayScene(Scene):
 
         snap = PERF.snapshot(fps=self.game.clock.fps)
         self.perf_hud.render(surface, snap)
+        # Objectives window draws below the sprite studio so F4 stays
+        # topmost when both are open, but above the HUD / menu / world.
+        if self.objectives_window is not None:
+            self.objectives_window.render(surface)
         if self.studio is not None:
             self.studio.render(surface)
-        if not (self.menu is not None and self.menu.is_open) and not (
-            self.studio is not None and self.studio.is_open
+        if (
+            not (self.menu is not None and self.menu.is_open)
+            and not (self.studio is not None and self.studio.is_open)
+            and not (
+                self.objectives_window is not None
+                and self.objectives_window.is_open
+            )
         ):
             self._render_hint(surface)
 
@@ -354,6 +422,13 @@ class PlayScene(Scene):
             return
         self._drag_pan.release()
         self.game.push_scene(ResearchScene(self.research))
+
+    def _open_objectives(self) -> None:
+        """Toggle the objectives / stats overlay via the HUD button."""
+        if self.objectives_window is None:
+            return
+        self._drag_pan.release()
+        self.objectives_window.toggle()
 
     def _apply_research_capacity(self) -> None:
         """Resize assembler ports in response to a ``research.changed`` event.
@@ -448,6 +523,11 @@ class PlayScene(Scene):
             if mrect is not None and mrect.collidepoint(pos):
                 return True
         if self.studio is not None and self.studio.is_open:
+            return True
+        if (
+            self.objectives_window is not None
+            and self.objectives_window.is_open
+        ):
             return True
         return False
 
@@ -597,7 +677,7 @@ class PlayScene(Scene):
     def _render_hint(self, surface: pygame.Surface) -> None:
         assert self.game is not None
         hint = self.game.assets.render_text(
-            "WASD / MMB drag pan  -  scroll zoom  -  Q inspect  -  1-7 tool  -  R / X1 rotate  -  T / X2 mirror  -  F3 perf  -  F4 sprite studio  -  LMB place/select  -  RMB delete  -  Alt hover info  -  ESC menu",
+            "WASD / MMB drag pan  -  scroll zoom  -  Q inspect  -  1-7 tool  -  R / X1 rotate  -  T / X2 mirror  -  J objectives  -  F3 perf  -  F4 sprite studio  -  LMB place/select  -  RMB delete  -  Alt hover info  -  ESC menu",
             TYPE.caption,
             PALETTE.muted,
         )

@@ -31,6 +31,7 @@ from ..world.direction import Direction
 
 if TYPE_CHECKING:
     from ..assets.loader import AssetLoader
+    from ..stats.tracker import StatsTracker
 
 
 # -- rolling rate tracker -------------------------------------------------
@@ -211,7 +212,7 @@ class _HudTooltip:
     def render(
         self,
         surface: pygame.Surface,
-        tracker: RateTracker,
+        tracker: "RateTracker | _StatsRateView",
         total_count: int,
     ) -> None:
         if not self.visible or self._current_item is None:
@@ -697,7 +698,47 @@ class _TTRow:
     sub_value: str | None = None
 
 
+class _StatsRateView:
+    """Adapter exposing the :class:`RateTracker` surface over a ``StatsTracker``.
+
+    The HUD tooltip consumes ``per_minute_produced`` / ``per_minute_consumed``
+    / ``net_series`` on a per-item object. When a :class:`StatsTracker`
+    is attached, the HUD hands out views bound to each item id so the
+    tooltip reads live numbers from the single source of truth without
+    duplicating ring-buffer state.
+    """
+
+    __slots__ = ("_item_id", "_stats")
+
+    def __init__(self, stats: StatsTracker, item_id: str) -> None:
+        self._stats = stats
+        self._item_id = item_id
+
+    def per_minute_produced(self, window_s: int) -> float:
+        return self._stats.rate_per_min(self._item_id, "produced", window_s)
+
+    def per_minute_consumed(self, window_s: int) -> float:
+        return self._stats.rate_per_min(self._item_id, "consumed", window_s)
+
+    def net_series(self, window_s: int = 60, smooth: int = 3) -> list[float]:
+        return self._stats.net_series(
+            self._item_id, window_s=window_s, smooth=smooth
+        )
+
+
 # -- HUD --------------------------------------------------------------------
+
+
+@dataclass
+class _HudButton:
+    """Render / hit state for a small HUD-top-bar button."""
+
+    rect: pygame.Rect = field(default_factory=lambda: pygame.Rect(0, 0, 0, 0))
+    hover: AnimValue = field(default_factory=lambda: AnimValue(value=0.0, speed=18.0))
+    press: AnimValue = field(default_factory=lambda: AnimValue(value=0.0, speed=22.0))
+    phase: float = 0.0
+    hovered: bool = False
+    prev_hovered: bool = False
 
 
 class HUD:
@@ -707,10 +748,13 @@ class HUD:
         events: EventBus,
         *,
         on_open_research: Callable[[], None] | None = None,
+        on_open_objectives: Callable[[], None] | None = None,
+        stats: StatsTracker | None = None,
     ) -> None:
         self.assets = assets
         self.events = events
         self.on_open_research = on_open_research
+        self.on_open_objectives = on_open_objectives
 
         tracked = (
             ITEMS.cocoa_bean,
@@ -721,8 +765,16 @@ class HUD:
             ITEMS.candy_bar,
         )
         self._cells: list[_Cell] = [_Cell(item=t) for t in tracked]
+        # Local legacy counters + trackers. Only used when no
+        # ``StatsTracker`` is attached (tests, demos) - when one is, we
+        # read straight from the shared tracker instead of duplicating
+        # state.
         self._counts: dict[str, int] = {t.id: 0 for t in tracked}
         self._rates: dict[str, RateTracker] = {t.id: RateTracker() for t in tracked}
+        self._stats: StatsTracker | None = stats
+        self._rate_views: dict[str, _StatsRateView] = {}
+        if stats is not None:
+            self._rate_views = {t.id: _StatsRateView(stats, t.id) for t in tracked}
 
         self._off_produced = events.on("item.produced", self._on_produced)
         self._off_consumed = events.on("item.consumed", self._on_consumed)
@@ -736,13 +788,21 @@ class HUD:
         self._prev_hovered_item_id: str | None = None
         self._tooltip = _HudTooltip(assets)
 
-        # Research-tree quick-open button (cogwheel glyph + label).
-        self._research_btn_rect: pygame.Rect = pygame.Rect(0, 0, 0, 0)
-        self._research_btn_hover = AnimValue(value=0.0, speed=18.0)
-        self._research_btn_press = AnimValue(value=0.0, speed=22.0)
-        self._research_btn_phase: float = 0.0
-        self._research_btn_hovered: bool = False
-        self._research_btn_prev_hover: bool = False
+        # Top-bar buttons: research tree + objectives / stats.
+        self._research_btn = _HudButton()
+        self._objectives_btn = _HudButton()
+
+    def attach_stats(self, stats: StatsTracker) -> None:
+        """Bind a :class:`StatsTracker` after construction.
+
+        Any legacy :class:`RateTracker` bumps stop firing from this
+        point on; the tooltip pulls its rate / series data from the
+        shared tracker.
+        """
+        self._stats = stats
+        self._rate_views = {
+            cell.item.id: _StatsRateView(stats, cell.item.id) for cell in self._cells
+        }
 
     def close(self) -> None:
         self._off_produced()
@@ -751,18 +811,22 @@ class HUD:
     # -- events ------------------------------------------------------------
 
     def _on_produced(self, item_type: ItemType) -> None:
-        self._counts[item_type.id] = self._counts.get(item_type.id, 0) + 1
-        tracker = self._rates.get(item_type.id)
-        if tracker is not None:
-            tracker.add_produced(1)
+        if self._stats is None:
+            # Fallback path: without a shared tracker we maintain our
+            # own counters so tests / demos still see rolling numbers.
+            self._counts[item_type.id] = self._counts.get(item_type.id, 0) + 1
+            tracker = self._rates.get(item_type.id)
+            if tracker is not None:
+                tracker.add_produced(1)
         # Throttled inside the cue catalogue so a 1M-item benchmark stays
         # whisper-quiet. ``audio_sim`` can also disable this entirely.
         SFX.play("sim.produced")
 
     def _on_consumed(self, item_type: ItemType) -> None:
-        tracker = self._rates.get(item_type.id)
-        if tracker is not None:
-            tracker.add_consumed(1)
+        if self._stats is None:
+            tracker = self._rates.get(item_type.id)
+            if tracker is not None:
+                tracker.add_consumed(1)
 
     # -- update/render -----------------------------------------------------
 
@@ -774,30 +838,27 @@ class HUD:
         mouse_down: bool = False,
         mouse_released: bool = False,
     ) -> None:
-        for tracker in self._rates.values():
-            tracker.tick_time(world_time)
+        if self._stats is None:
+            for tracker in self._rates.values():
+                tracker.tick_time(world_time)
 
-        # Research button hit-testing (uses last-rendered rect).
-        btn_hover = False
-        if (
-            self.on_open_research is not None
-            and mouse_pos is not None
-            and self._research_btn_rect.w > 0
-            and self._research_btn_rect.collidepoint(mouse_pos)
-        ):
-            btn_hover = True
-        self._research_btn_hovered = btn_hover
-        self._research_btn_hover.to(1.0 if btn_hover else 0.0)
-        self._research_btn_hover.update(dt)
-        self._research_btn_press.to(1.0 if (btn_hover and mouse_down) else 0.0)
-        self._research_btn_press.update(dt)
-        self._research_btn_phase += dt
-        if btn_hover and not self._research_btn_prev_hover:
-            SFX.play("ui.hover")
-        if btn_hover and mouse_released and self.on_open_research is not None:
-            SFX.play("ui.click")
-            self.on_open_research()
-        self._research_btn_prev_hover = btn_hover
+        # Top-bar buttons: research tree + objectives / stats.
+        self._tick_button(
+            self._research_btn,
+            self.on_open_research,
+            mouse_pos,
+            mouse_down,
+            mouse_released,
+            dt,
+        )
+        self._tick_button(
+            self._objectives_btn,
+            self.on_open_objectives,
+            mouse_pos,
+            mouse_down,
+            mouse_released,
+            dt,
+        )
 
         # Hover test against last-rendered cell rects.
         hovered: str | None = None
@@ -829,6 +890,37 @@ class HUD:
             self._tooltip.set_target(None, None)
         self._tooltip.update(dt)
 
+    def _tick_button(
+        self,
+        btn: _HudButton,
+        callback: Callable[[], None] | None,
+        mouse_pos: tuple[int, int] | None,
+        mouse_down: bool,
+        mouse_released: bool,
+        dt: float,
+    ) -> None:
+        """Advance a button's hover/press animations + fire its callback."""
+        hovered = False
+        if (
+            callback is not None
+            and mouse_pos is not None
+            and btn.rect.w > 0
+            and btn.rect.collidepoint(mouse_pos)
+        ):
+            hovered = True
+        btn.hovered = hovered
+        btn.hover.to(1.0 if hovered else 0.0)
+        btn.hover.update(dt)
+        btn.press.to(1.0 if (hovered and mouse_down) else 0.0)
+        btn.press.update(dt)
+        btn.phase += dt
+        if hovered and not btn.prev_hovered:
+            SFX.play("ui.hover")
+        if hovered and mouse_released and callback is not None:
+            SFX.play("ui.click")
+            callback()
+        btn.prev_hovered = hovered
+
     def set_transform(self, rotation: Direction, mirrored: bool) -> None:
         """Sync the transform indicator with the live placement cursor."""
         self._rotation = rotation
@@ -845,9 +937,11 @@ class HUD:
 
         x = rect.x + THEME.spacing.md + title.get_width() + THEME.spacing.xl
         for cell in self._cells:
-            x = self._render_resource(
-                surface, rect, x, cell, self._counts[cell.item.id]
-            )
+            if self._stats is not None:
+                count = int(self._stats.total(cell.item.id, "produced"))
+            else:
+                count = self._counts[cell.item.id]
+            x = self._render_resource(surface, rect, x, cell, count)
 
         fps_surf = self.assets.render_text(f"{int(fps):>3} FPS", TYPE.mono, PALETTE.muted)
         fps_x = rect.right - fps_surf.get_width() - THEME.spacing.md
@@ -861,27 +955,44 @@ class HUD:
         pip_y = rect.y + height // 2
         self._render_transform_pip(surface, pip_x, pip_y)
 
-        # Research quick-open button just left of the transform pip.
-        if self.on_open_research is not None:
-            btn_w = 120
-            btn_h = 30
-            btn_x = pip_x - 24 - btn_w
+        # Research + Objectives pills, stacked right-to-left just left of
+        # the transform pip. Objectives is nearest the pip so the brain /
+        # journal affordance is visually grouped with "what the player is
+        # currently doing", while research sits next to it as a
+        # progression anchor.
+        btn_w = 120
+        btn_h = 30
+        cursor_x = pip_x - 24
+        if self.on_open_objectives is not None:
+            btn_x = cursor_x - btn_w
             btn_y = rect.y + (height - btn_h) // 2
-            self._research_btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
-            self._render_research_button(surface, self._research_btn_rect)
+            self._objectives_btn.rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+            self._render_objectives_button(surface, self._objectives_btn.rect)
+            cursor_x = btn_x - THEME.spacing.sm
         else:
-            self._research_btn_rect = pygame.Rect(0, 0, 0, 0)
+            self._objectives_btn.rect = pygame.Rect(0, 0, 0, 0)
+
+        if self.on_open_research is not None:
+            btn_x = cursor_x - btn_w
+            btn_y = rect.y + (height - btn_h) // 2
+            self._research_btn.rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+            self._render_research_button(surface, self._research_btn.rect)
+        else:
+            self._research_btn.rect = pygame.Rect(0, 0, 0, 0)
 
         # Tooltip sits on top of everything in the HUD layer.
         if self._tooltip.visible:
             active = self._tooltip.current_item
             active_id = active.id if active is not None else self._hovered_item_id
             if active_id is not None:
-                self._tooltip.render(
-                    surface,
-                    self._rates[active_id],
-                    self._counts.get(active_id, 0),
-                )
+                rate_source: RateTracker | _StatsRateView
+                if self._stats is not None:
+                    rate_source = self._rate_views[active_id]
+                    total = int(self._stats.total(active_id, "produced"))
+                else:
+                    rate_source = self._rates[active_id]
+                    total = self._counts.get(active_id, 0)
+                self._tooltip.render(surface, rate_source, total)
 
     def _render_resource(
         self,
@@ -945,47 +1056,117 @@ class HUD:
     def _render_research_button(
         self, surface: pygame.Surface, rect: pygame.Rect
     ) -> None:
-        """Beveled pill with a small cogwheel glyph + label."""
-        hover = self._research_btn_hover.value
-        press = self._research_btn_press.value
-
-        fill = lighten(PALETTE.bg_raised, 0.04 + 0.05 * hover)
-        border = lighten(PALETTE.primary, 0.05 * hover)
-        beveled_panel(surface, rect, fill=fill, border=border)
-
-        glow_a = int(28 + 48 * hover - 30 * press)
-        if glow_a > 0:
-            with acquired(rect.size) as glow:
-                glow.fill(with_alpha(PALETTE.primary, glow_a))
-                surface.blit(glow, rect.topleft)
-
-        if press > 0.01:
-            with acquired(rect.size) as dark:
-                dark.fill(with_alpha(PALETTE.bg_deep, int(50 * press)))
-                surface.blit(dark, rect.topleft)
-
+        """Beveled pill with a small cogwheel glyph + RESEARCH label."""
+        btn = self._research_btn
+        hover = btn.hover.value
+        press = btn.press.value
+        self._render_pill_button(surface, rect, hover, press, PALETTE.primary)
         pad = 8
         gear_cx = rect.x + pad + 8
         gear_cy = rect.centery
-        rot = self._research_btn_phase * (1.8 if hover > 0.01 else 0.6)
+        rot = btn.phase * (1.8 if hover > 0.01 else 0.6)
         self._draw_gear(surface, (gear_cx, gear_cy), 7, rot, PALETTE.primary)
-
         label_col = PALETTE.text_strong if hover > 0.1 else PALETTE.text_body
         label = self.assets.render_text("RESEARCH", TYPE.label, label_col)
         lx = gear_cx + 8 + (rect.right - (gear_cx + 8) - label.get_width()) // 2
         ly = rect.centery - label.get_height() // 2 - int(round(press * 1))
         surface.blit(label, (lx, ly))
 
-        # Subtle bottom accent line on hover, ties into the toolbar theme.
+    def _render_objectives_button(
+        self, surface: pygame.Surface, rect: pygame.Rect
+    ) -> None:
+        """Beveled pill with a small check-list glyph + OBJECTIVES label."""
+        btn = self._objectives_btn
+        hover = btn.hover.value
+        press = btn.press.value
+        accent = PALETTE.secondary
+        self._render_pill_button(surface, rect, hover, press, accent)
+        pad = 8
+        glyph_cx = rect.x + pad + 8
+        glyph_cy = rect.centery
+        pulse = 0.5 + 0.5 * math.sin(btn.phase * 2.2)
+        self._draw_journal_glyph(
+            surface, (glyph_cx, glyph_cy), 7, accent, pulse if hover > 0.01 else 0.0
+        )
+        label_col = PALETTE.text_strong if hover > 0.1 else PALETTE.text_body
+        label = self.assets.render_text("OBJECTIVES", TYPE.label, label_col)
+        lx = glyph_cx + 8 + (rect.right - (glyph_cx + 8) - label.get_width()) // 2
+        ly = rect.centery - label.get_height() // 2 - int(round(press * 1))
+        surface.blit(label, (lx, ly))
+
+    def _render_pill_button(
+        self,
+        surface: pygame.Surface,
+        rect: pygame.Rect,
+        hover: float,
+        press: float,
+        accent: tuple[int, int, int],
+    ) -> None:
+        """Shared pill chrome - fill, border, glow, press-dim, accent line."""
+        fill = lighten(PALETTE.bg_raised, 0.04 + 0.05 * hover)
+        border = lighten(accent, 0.05 * hover)
+        beveled_panel(surface, rect, fill=fill, border=border)
+        glow_a = int(28 + 48 * hover - 30 * press)
+        if glow_a > 0:
+            with acquired(rect.size) as glow:
+                glow.fill(with_alpha(accent, glow_a))
+                surface.blit(glow, rect.topleft)
+        if press > 0.01:
+            with acquired(rect.size) as dark:
+                dark.fill(with_alpha(PALETTE.bg_deep, int(50 * press)))
+                surface.blit(dark, rect.topleft)
         if hover > 0.02:
             line_a = int(200 * hover)
             with acquired((rect.w - 6, 2)) as ul:
-                ul.fill(with_alpha(PALETTE.primary, line_a))
+                ul.fill(with_alpha(accent, line_a))
                 surface.blit(
                     ul,
                     (rect.x + 3, rect.bottom - 3),
                     special_flags=pygame.BLEND_PREMULTIPLIED,
                 )
+
+    @staticmethod
+    def _draw_journal_glyph(
+        surface: pygame.Surface,
+        center: tuple[int, int],
+        radius: int,
+        color: tuple[int, int, int],
+        pulse: float,
+    ) -> None:
+        """Tiny procedural checklist: three horizontal rules + a check mark.
+
+        Reads as "journal / quest log" at small sizes. ``pulse`` in 0-1
+        gently brightens the check mark on hover so the badge feels
+        alive without stealing attention.
+        """
+        cx, cy = center
+        w = radius * 2
+        h = int(radius * 1.7)
+        x0 = cx - w // 2
+        y0 = cy - h // 2
+        # Three scanlines suggesting checklist rows.
+        rule_color = with_alpha(color, 210)
+        for i in range(3):
+            ry = y0 + 1 + i * (h // 3)
+            pygame.draw.line(
+                surface, rule_color, (x0, ry), (x0 + w - 3, ry), 1
+            )
+        # Check-mark overlay on the top row, brightens slightly with pulse.
+        check_color = lighten(color, 0.15 + 0.2 * pulse)
+        pygame.draw.line(
+            surface,
+            check_color,
+            (x0 + 1, y0 + 2),
+            (x0 + 3, y0 + 4),
+            2,
+        )
+        pygame.draw.line(
+            surface,
+            check_color,
+            (x0 + 3, y0 + 4),
+            (x0 + 6, y0),
+            2,
+        )
 
     @staticmethod
     def _draw_gear(

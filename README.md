@@ -56,6 +56,7 @@ If you prefer to pre-populate fonts, drop these `.ttf` files into `assets/fonts/
 | Right click    | Delete                                          |
 | **F3**         | Toggle live performance HUD                     |
 | **F4**         | Toggle sprite studio                            |
+| **J**          | Toggle objectives / stats window                |
 | Esc            | Back / quit                                     |
 | Enter (menu)   | Play                                            |
 | **B (menu)**   | Launch the 1M-item benchmark scene              |
@@ -146,7 +147,9 @@ fac-py/
     buildings/    Port (ring buffer), building base, miner, assembler, registry
     rendering/    chunk renderer, scaled-sprite cache, cull, surface pool,
                   layers, renderer, tween/animation, pixel helpers
-    ui/           widget, HUD, toolbar, placement cursor, perf HUD
+    stats/        StatsTracker, ObjectivesState + catalog
+    ui/           widget, HUD, toolbar, placement cursor, perf HUD,
+                  sprite studio, objectives window
     scenes/       scene base, menu, play, benchmark
   tests/
     conftest.py
@@ -175,6 +178,36 @@ fac-py/
   `CHUNK_SIZE` (16x16) chunk per zoom bin. Only dirty chunks re-bake.
   Animated belts and items are culled per-chain and drawn via
   `surface.blits` in a single call per chain.
+
+## Objectives & stats
+
+The play scene owns a single `StatsTracker` (`src/stats/tracker.py`)
+that subscribes once to `item.produced`, `item.consumed`,
+`building.placed`, and `building.removed`. It keeps per-item
+1-second ring buffers over the last hour of history (so every UI
+query window fits inside) and surfaces totals, rates, averages,
+medians, mins, maxes, peaks, and per-second net series through a
+read-only query API. Building counts are mirrored into both
+per-prefab and per-class buckets, and a session record samples
+belt-tile / building / items-in-world totals once per simulated
+second. Both the HUD tooltip and the objectives window read from
+that single source of truth.
+
+On top of the tracker, `ObjectivesState` (`src/stats/objectives.py`)
+evaluates an immutable catalog of `ObjectiveSpec` entries each
+frame -- produce totals, sustained rates over a rolling window,
+building-count milestones, belt-tile milestones -- and emits
+`objective.completed` on the event bus the first tick a spec
+crosses its threshold. The default catalog in
+`src/stats/catalog.py` chains tiers via `prereq_ids` so late-game
+goals stay locked until their foundations are done.
+
+Press **J** (or click the `OBJECTIVES` pill in the top HUD bar, next
+to `RESEARCH`) to open a right-docked, slide-in window with four
+tabs -- Objectives, Items, Buildings, Session -- mirroring the
+`SpriteStudio` idiom (beveled panels, `Tween` / `AnimValue`
+animations, `_Hit` dispatch, `THEME` / `PALETTE` / `TYPE` tokens)
+so it feels native to the rest of the UI.
 
 ## Fonts / licensing
 

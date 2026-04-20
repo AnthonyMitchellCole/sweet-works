@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from ..belts.network_soa import BeltNetworkSoA
     from ..buildings.building import Building
     from ..research.state import ResearchState
+    from ..stats.tracker import StatsTracker
 
 
 class World:
@@ -27,6 +28,10 @@ class World:
         # Research state is attached by ``PlayScene`` so the sim stays
         # agnostic when ``World`` is used outside gameplay (tests, demos).
         self.research: ResearchState | None = None
+        # Optional stats tracker. Present during a play session; left
+        # ``None`` for tests / demos / benchmarks so the sim core stays
+        # decoupled from the stats subsystem.
+        self.stats: StatsTracker | None = None
 
     # -- queries -----------------------------------------------------------
 
@@ -71,6 +76,7 @@ class World:
             self._building_cells[c] = building
         if self.belt_network is not None:
             self.belt_network.on_building_changed()
+        self.events.emit("building.placed", building=building)
         return True
 
     def remove_building(self, building: Building) -> None:
@@ -81,6 +87,7 @@ class World:
             self._building_cells.pop(c, None)
         if self.belt_network is not None:
             self.belt_network.on_building_changed()
+        self.events.emit("building.removed", building=building)
 
     def remove_at(self, pos: Coord) -> bool:
         tile = self.remove_tile(pos)
