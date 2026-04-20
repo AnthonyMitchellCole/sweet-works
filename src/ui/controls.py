@@ -166,7 +166,11 @@ class Toggle(Widget):
         super().__init__(pygame.Rect(topleft[0], topleft[1], self.WIDTH, self.HEIGHT))
         self._value: bool = bool(value)
         self.on_change = on_change or (lambda _v: None)
-        self._knob = AnimValue(value=1.0 if self._value else 0.0, speed=18.0)
+        # Seed both ``value`` and ``target`` -- otherwise the knob lerps
+        # from the correct initial position back to the dataclass default
+        # of 0, making a toggle constructed ON animate immediately to OFF.
+        knob_target = 1.0 if self._value else 0.0
+        self._knob = AnimValue(value=knob_target, target=knob_target, speed=18.0)
 
     @property
     def value(self) -> bool:
@@ -388,7 +392,11 @@ class Slider(Widget):
         self.on_change = on_change or (lambda _v: None)
         self.format: Callable[[float], str] = format or (lambda v: f"{v:.2f}")
         self._value: float = self._clamp(value)
-        self._thumb_anim = AnimValue(value=self._fraction(self._value), speed=22.0)
+        # Seed value + target together: AnimValue.target defaults to 0.0,
+        # which would otherwise drag the thumb straight to the left edge
+        # on the first ``update`` regardless of the real value.
+        frac = self._fraction(self._value)
+        self._thumb_anim = AnimValue(value=frac, target=frac, speed=22.0)
         self._dragging: bool = False
 
     # -- accessors

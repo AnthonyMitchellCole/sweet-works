@@ -1,4 +1,10 @@
 {
+  "audio_master": 0.8,
+  "audio_muted": false,
+  "audio_sfx": 0.9,
+  "audio_sim": false,
+  "audio_ui": true,
+  "audio_world": true,
   "belt_anim_hz": 8.0,
   "camera_drag_inertia_decay": 6.0,
   "camera_pan_speed": 480.0,
