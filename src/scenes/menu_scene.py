@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import pygame
 
+from ..assets import paths
 from ..audio.sfx import SFX
 from ..design.palette import PALETTE, lighten, with_alpha
 from ..design.theme import THEME
@@ -51,6 +52,13 @@ class MenuScene(Scene):
         self._underline = AnimValue(value=0.0, target=1.0, speed=14.0)
         # Reveal stagger: each item's per-row tween driven by self._t after on_enter.
         self._reveal_t0: float = 0.0
+
+        # Branding logo (replaces the SWEET WORKS text panel). Loaded lazily
+        # on first render, then rescaled only when the target size changes so
+        # window resizes stay cheap.
+        self._logo_raw: pygame.Surface | None = None
+        self._logo_scaled: pygame.Surface | None = None
+        self._logo_scaled_size: tuple[int, int] = (0, 0)
 
         # Falling-sprinkle particles. Positions are normalised floats so
         # the layer survives window resizes without reshuffling.
@@ -250,26 +258,30 @@ class MenuScene(Scene):
                 surface.blit(surf, (int(x) - 4, int(y) - 4))
 
     def _render_title(self, surface: pygame.Surface) -> None:
-        assert self.game is not None
-        assets = self.game.assets
-
-        title = assets.render_text("SWEET WORKS", TYPE.display, PALETTE.text_strong)
-        sub = assets.render_text(
-            "Extract. Mix. Wrap.", TYPE.body, PALETTE.muted
-        )
         w, h = surface.get_size()
         cx = w // 2
-        cy = h // 2 - 120
+        # Reserve the upper half of the screen for the branding logo: the menu
+        # cards sit at ``h // 2 + 20`` (see ``_layout``), so the logo's bottom
+        # edge hugs ~10 px above them.
+        target_h = max(180, min(h // 2 - 20, 460))
+        target_w = max(120, w - 80)
+        logo = self._get_logo(target_w, target_h)
+        rect = logo.get_rect()
+        rect.midbottom = (cx, h // 2 + 10)
+        surface.blit(logo, rect.topleft)
 
-        bg = pygame.Rect(0, 0, title.get_width() + 48, title.get_height() + 32)
-        bg.center = (cx, cy)
-        beveled_panel(surface, bg, fill=PALETTE.bg_raised, border=PALETTE.primary)
-        surface.blit(title, (cx - title.get_width() // 2, cy - title.get_height() // 2))
-
-        surface.blit(
-            sub,
-            (cx - sub.get_width() // 2, bg.bottom + 12),
-        )
+    def _get_logo(self, target_w: int, target_h: int) -> pygame.Surface:
+        if self._logo_raw is None:
+            path = paths.ASSETS / "branding" / "menu_logo.png"
+            self._logo_raw = pygame.image.load(str(path)).convert_alpha()
+        raw = self._logo_raw
+        rw, rh = raw.get_size()
+        scale = min(target_w / rw, target_h / rh)
+        size = (max(1, int(rw * scale)), max(1, int(rh * scale)))
+        if self._logo_scaled is None or self._logo_scaled_size != size:
+            self._logo_scaled = pygame.transform.smoothscale(raw, size)
+            self._logo_scaled_size = size
+        return self._logo_scaled
 
     def _render_menu(self, surface: pygame.Surface) -> None:
         assert self.game is not None
