@@ -21,6 +21,13 @@ Tick algorithm per step, fully vectorised across all chains:
 Correctness note: this preserves the classic "gap propagates upstream
 at one slot per tick" semantics. Each item moves exactly one slot per
 tick, including at chain-to-chain handoffs.
+
+Render interpolation: ``prev_slot_idx[i]`` records the global slot index
+that slot ``i`` received its item from this tick (``-1`` for static or
+fresh arrivals). The renderer looks up the world-space centre of both
+the source and destination slots and interpolates between them, so items
+moving across belts that face different directions (turns, chain handoffs)
+render as a smooth diagonal instead of a teleport.
 """
 
 from __future__ import annotations
@@ -49,9 +56,12 @@ class BeltChainsSoA:
     slots: np.ndarray           # int16, shape (total_slots,). 0 = empty.
     prev_slots: np.ndarray      # int16, shape (total_slots,). Pre-tick snapshot.
 
-    # Per-slot "incoming offset" in slot units (int8). 0 = static, -1 = slid
-    # from the slot just upstream inside the chain. Used for render interp.
-    prev_offset: np.ndarray
+    # Per-slot "source" for the move that produced this tick's state.
+    # ``prev_slot_idx[i]`` is the global slot index that slot ``i`` received
+    # its item from this tick, or ``-1`` for static / freshly sourced items.
+    # Used by the renderer to interpolate both straight moves *and* turns
+    # in world space (generic and direction-agnostic).
+    prev_slot_idx: np.ndarray
 
     # -- per-chain topology -------------------------------------------------
     chain_offset: np.ndarray     # int32, shape (C + 1,)  CSR: chain k = [off[k]:off[k+1]].
@@ -68,6 +78,10 @@ class BeltChainsSoA:
     belt_local_start: np.ndarray  # int32, shape (B,)     slot index where belt begins.
     belt_pos: np.ndarray          # int32, shape (B, 2)   world-tile (x, y).
     belt_dir: np.ndarray          # int8,  shape (B,)     0 = E, 1 = N, 2 = W, 3 = S.
+
+    # Per-slot back-pointer to owning belt index. Pre-computed; enables
+    # O(1) vectorised "which belt owns this slot?" lookups in the renderer.
+    slot_belt_idx: np.ndarray     # int32, shape (total_slots,).
 
     # -- optional benchmark specials ---------------------------------------
     # When set, chains in ``auto_sink_chains`` unconditionally drain their
@@ -91,7 +105,7 @@ class BeltChainsSoA:
         return cls(
             slots=zero_i16,
             prev_slots=zero_i16.copy(),
-            prev_offset=zero_i8,
+            prev_slot_idx=zero_i32,
             chain_offset=np.zeros(1, dtype=np.int32),
             chain_succ_chain=zero_i32,
             chain_succ_port=zero_i32,
@@ -102,6 +116,7 @@ class BeltChainsSoA:
             belt_local_start=zero_i32,
             belt_pos=np.zeros((0, 2), dtype=np.int32),
             belt_dir=zero_i8,
+            slot_belt_idx=zero_i32,
         )
 
     # ---- properties ------------------------------------------------------
@@ -132,6 +147,11 @@ class BeltChainsSoA:
         # 1. Snapshot pre-tick state for the renderer. One memcpy, no alloc.
         np.copyto(self.prev_slots, slots)
 
+        # Clear previous-tick provenance; in-chain and tail-exit steps
+        # below set entries for slots that received an item this tick.
+        prev_slot_idx = self.prev_slot_idx
+        prev_slot_idx.fill(-1)
+
         # 2. Benchmark auto-sink: drain tails FIRST, so propagation can
         #    refill them this tick (keeps the stress test at steady state
         #    and guarantees the "one slot per tick" rule still holds).
@@ -152,24 +172,22 @@ class BeltChainsSoA:
         slots[1:][can_move] = src
         slots[:-1][can_move] = EMPTY_ID
 
+        # Record in-chain provenance: slot i moving to i+1 means the
+        # destination slot i+1 was sourced from i.
+        moved_src = np.flatnonzero(can_move).astype(np.int32, copy=False)
+        if moved_src.size:
+            prev_slot_idx[moved_src + 1] = moved_src
+
         # 4. Tail exits, in reverse-topological order. Downstream chain
         #    heads have already moved this tick, so an exit here is at
         #    most a one-slot translation.
         tail_moved = self._resolve_tail_exits()
+        for head, tail in tail_moved:
+            prev_slot_idx[head] = tail
 
-        # 5. Compute prev_offset for render interpolation. Slots that just
-        #    received an upstream item via step 3 get offset = -1, all
-        #    others remain 0 (static). Cross-chain exits are also marked
-        #    so the renderer can interpolate handoffs smoothly.
-        prev_off = self.prev_offset
-        prev_off.fill(0)
-        prev_off[1:][can_move] = -1
-        if tail_moved:
-            prev_off[tail_moved] = -1
-
-        # 6. Benchmark auto-source: refill empty chain heads. Runs AFTER
+        # 5. Benchmark auto-source: refill empty chain heads. Runs AFTER
         #    propagation so the newly-sourced item is a fresh arrival
-        #    (prev_offset remains 0 for heads).
+        #    (prev_slot_idx remains -1 for heads -> drawn statically).
         if self.auto_source_chains is not None and self.auto_source_tid != EMPTY_ID:
             src_head = self.chain_offset[self.auto_source_chains]
             empty = slots[src_head] == EMPTY_ID
@@ -177,19 +195,21 @@ class BeltChainsSoA:
             if fillable.size:
                 slots[fillable] = self.auto_source_tid
 
-    def _resolve_tail_exits(self) -> list[int]:
+    def _resolve_tail_exits(self) -> list[tuple[int, int]]:
         """Try to drain each chain's tail slot into the next chain / port.
 
-        Returns a list of slot indices that just received an item via a
-        cross-chain handoff (used to populate ``prev_offset`` so the
-        renderer can interpolate the move smoothly).
+        Returns a list of ``(head, tail)`` slot-index pairs: the head is
+        the destination slot that just received an item via a cross-chain
+        handoff, and tail is its source. The caller uses this to write
+        ``prev_slot_idx[head] = tail`` so the renderer can interpolate
+        cross-chain handoffs (including direction-change turns) smoothly.
         """
         slots = self.slots
         offsets = self.chain_offset
         succ_chain = self.chain_succ_chain
         succ_port = self.chain_succ_port
         ports = self.ports
-        moved: list[int] = []
+        moved: list[tuple[int, int]] = []
 
         for k in self.topo_order:
             tail = int(offsets[k + 1] - 1)
@@ -202,7 +222,7 @@ class BeltChainsSoA:
                 if int(slots[head]) == EMPTY_ID:
                     slots[head] = tid
                     slots[tail] = EMPTY_ID
-                    moved.append(head)
+                    moved.append((head, tail))
                 continue
             sp = int(succ_port[k])
             if sp >= 0 and ports is not None:

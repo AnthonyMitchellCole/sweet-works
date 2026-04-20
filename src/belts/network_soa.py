@@ -101,9 +101,11 @@ class BeltNetworkSoA:
             s = int(soa.belt_local_start[belt.soa_index])
             soa.slots[s : s + SLOTS_PER_BELT] = saved
         # Fresh tick starts with a stable snapshot (no phantom interpolation
-        # from a now-defunct previous layout).
+        # from a now-defunct previous layout). All items are drawn at their
+        # current slot centres until the next simulation tick records new
+        # provenance in ``prev_slot_idx``.
         np.copyto(soa.prev_slots, soa.slots)
-        soa.prev_offset.fill(0)
+        soa.prev_slot_idx.fill(-1)
 
     # ---- world integration ----------------------------------------------
 

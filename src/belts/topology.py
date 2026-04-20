@@ -188,12 +188,16 @@ def build_chains(belts: Iterable[ConveyorBelt], world: World | None = None) -> B
     # -- 9. Assemble SoA ----------------------------------------------------
     slots = np.zeros(total_slots, dtype=np.int16)
     prev_slots = np.zeros(total_slots, dtype=np.int16)
-    prev_offset = np.zeros(total_slots, dtype=np.int8)
+    prev_slot_idx = np.full(total_slots, -1, dtype=np.int32)
+
+    # Per-slot owning belt. Slot layout is contiguous per belt in belt-index
+    # order, so a simple repeat reproduces the belt index for every slot.
+    slot_belt_idx = np.repeat(np.arange(B, dtype=np.int32), SLOTS_PER_BELT)
 
     soa = BeltChainsSoA(
         slots=slots,
         prev_slots=prev_slots,
-        prev_offset=prev_offset,
+        prev_slot_idx=prev_slot_idx,
         chain_offset=chain_offset,
         chain_succ_chain=chain_succ_chain,
         chain_succ_port=chain_succ_port,
@@ -204,6 +208,7 @@ def build_chains(belts: Iterable[ConveyorBelt], world: World | None = None) -> B
         belt_local_start=belt_local_start_arr,
         belt_pos=belt_pos_arr,
         belt_dir=belt_dir_arr,
+        slot_belt_idx=slot_belt_idx,
         ports=port_list if port_list else None,
     )
 
@@ -288,7 +293,8 @@ def build_benchmark(
     chain_offset = np.arange(0, total_slots + 1, belts_per_chain_slots, dtype=np.int32)
     slots = np.full(total_slots, fill_tid, dtype=np.int16)
     prev_slots = slots.copy()
-    prev_offset = np.zeros(total_slots, dtype=np.int8)
+    prev_slot_idx = np.full(total_slots, -1, dtype=np.int32)
+    slot_belt_idx = np.repeat(np.arange(B, dtype=np.int32), SLOTS_PER_BELT)
 
     chain_succ_chain = np.full(n_chains, -1, dtype=np.int32)
     chain_succ_port = np.full(n_chains, -1, dtype=np.int32)
@@ -318,7 +324,7 @@ def build_benchmark(
     soa = BeltChainsSoA(
         slots=slots,
         prev_slots=prev_slots,
-        prev_offset=prev_offset,
+        prev_slot_idx=prev_slot_idx,
         chain_offset=chain_offset,
         chain_succ_chain=chain_succ_chain,
         chain_succ_port=chain_succ_port,
@@ -329,6 +335,7 @@ def build_benchmark(
         belt_local_start=belt_local_start,
         belt_pos=belt_pos,
         belt_dir=belt_dir,
+        slot_belt_idx=slot_belt_idx,
         auto_sink_chains=np.arange(n_chains, dtype=np.int32),
         auto_source_chains=np.arange(n_chains, dtype=np.int32),
         auto_source_tid=int(fill_tid) if fill_tid != EMPTY_ID else 1,

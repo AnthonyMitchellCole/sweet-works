@@ -29,7 +29,7 @@ def _single_chain(n_belts: int) -> BeltChainsSoA:
     chain_offset = np.array([0, total], dtype=np.int32)
     slots = np.zeros(total, dtype=np.int16)
     prev_slots = slots.copy()
-    prev_offset = np.zeros(total, dtype=np.int8)
+    prev_slot_idx = np.full(total, -1, dtype=np.int32)
 
     belt_pos = np.stack(
         [np.arange(n_belts, dtype=np.int32), np.zeros(n_belts, dtype=np.int32)],
@@ -38,6 +38,7 @@ def _single_chain(n_belts: int) -> BeltChainsSoA:
     belt_chain = np.zeros(n_belts, dtype=np.int32)
     belt_local_start = np.arange(0, total, SLOTS_PER_BELT, dtype=np.int32)
     belt_dir = np.zeros(n_belts, dtype=np.int8)
+    slot_belt_idx = np.repeat(np.arange(n_belts, dtype=np.int32), SLOTS_PER_BELT)
 
     chain_bbox = np.array(
         [[0, 0, n_belts - 1, 0]], dtype=np.int32
@@ -48,7 +49,7 @@ def _single_chain(n_belts: int) -> BeltChainsSoA:
     return BeltChainsSoA(
         slots=slots,
         prev_slots=prev_slots,
-        prev_offset=prev_offset,
+        prev_slot_idx=prev_slot_idx,
         chain_offset=chain_offset,
         chain_succ_chain=np.array([-1], dtype=np.int32),
         chain_succ_port=np.array([-1], dtype=np.int32),
@@ -59,6 +60,7 @@ def _single_chain(n_belts: int) -> BeltChainsSoA:
         belt_local_start=belt_local_start,
         belt_pos=belt_pos,
         belt_dir=belt_dir,
+        slot_belt_idx=slot_belt_idx,
     )
 
 
@@ -70,7 +72,7 @@ def _two_chain_handoff(n1: int, n2: int) -> BeltChainsSoA:
     chain_offset = np.array([0, t1, total], dtype=np.int32)
     slots = np.zeros(total, dtype=np.int16)
     prev_slots = slots.copy()
-    prev_offset = np.zeros(total, dtype=np.int8)
+    prev_slot_idx = np.full(total, -1, dtype=np.int32)
 
     n_belts = n1 + n2
     belt_chain = np.concatenate(
@@ -87,6 +89,7 @@ def _two_chain_handoff(n1: int, n2: int) -> BeltChainsSoA:
         axis=1,
     )
     belt_dir = np.zeros(n_belts, dtype=np.int8)
+    slot_belt_idx = np.repeat(np.arange(n_belts, dtype=np.int32), SLOTS_PER_BELT)
     chain_bbox = np.array(
         [[0, 0, n1 - 1, 0], [n1, 0, n1 + n2 - 1, 0]], dtype=np.int32
     )
@@ -97,7 +100,7 @@ def _two_chain_handoff(n1: int, n2: int) -> BeltChainsSoA:
     return BeltChainsSoA(
         slots=slots,
         prev_slots=prev_slots,
-        prev_offset=prev_offset,
+        prev_slot_idx=prev_slot_idx,
         chain_offset=chain_offset,
         chain_succ_chain=np.array([1, -1], dtype=np.int32),
         chain_succ_port=np.array([-1, -1], dtype=np.int32),
@@ -108,6 +111,7 @@ def _two_chain_handoff(n1: int, n2: int) -> BeltChainsSoA:
         belt_local_start=belt_local_start,
         belt_pos=belt_pos,
         belt_dir=belt_dir,
+        slot_belt_idx=slot_belt_idx,
     )
 
 
@@ -203,13 +207,24 @@ def test_prev_slots_snapshot_matches_pre_tick_state() -> None:
     assert np.array_equal(soa.prev_slots, snapshot)
 
 
-def test_prev_offset_marks_slots_that_received_upstream_items() -> None:
+def test_prev_slot_idx_marks_source_slot_after_propagation() -> None:
     soa = _single_chain(2)  # 8 slots
     soa.slots[0] = 2
     soa.tick()
-    # slot 1 was filled by slot 0, so prev_offset[1] should be -1.
-    assert soa.prev_offset[1] == -1
-    assert soa.prev_offset[0] == 0
+    # Slot 1 was filled by slot 0, so its source index is 0. Slot 0 now
+    # holds nothing (got moved), and nothing moved INTO slot 0, so -1.
+    assert soa.prev_slot_idx[1] == 0
+    assert soa.prev_slot_idx[0] == -1
+
+
+def test_prev_slot_idx_marks_cross_chain_handoff_source() -> None:
+    soa = _two_chain_handoff(2, 2)
+    # Chain 0 tail (slot 7) has item 1; chain 1 is empty so the head
+    # (slot 8) must receive via the tail-exit path, recording 7 as source.
+    soa.slots[7] = 1
+    soa.tick()
+    assert soa.slots[8] == 1
+    assert soa.prev_slot_idx[8] == 7
 
 
 def test_total_items_counts_only_nonempty_slots() -> None:

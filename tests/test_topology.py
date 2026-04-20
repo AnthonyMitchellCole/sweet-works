@@ -190,6 +190,75 @@ def test_items_survive_turn_chain_tick() -> None:
     assert int((soa.slots == 5).sum()) <= 1
 
 
+def test_slot_world_centres_interpolates_turn_diagonally() -> None:
+    """The renderer helper must map a turning chain's slots to world
+    centres such that the cross-turn interpolation path is a short
+    diagonal through the corner tile, not a teleport."""
+    from src.belts.belt_renderer import _slot_world_centres
+    from src.core import config
+
+    belts = [
+        ConveyorBelt((0, 0), Direction.E),
+        ConveyorBelt((1, 0), Direction.E),
+        ConveyorBelt((2, 0), Direction.S),  # turn tile
+    ]
+    soa = build_chains(belts)
+    tile = float(config.TILE)
+
+    # Source slot: tail of belt 1 (east), slot 7.
+    src = np.array([7], dtype=np.int64)
+    # Destination slot: head of belt 2 (south), slot 8.
+    dst = np.array([8], dtype=np.int64)
+
+    swx, swy = _slot_world_centres(src, soa, tile)
+    dwx, dwy = _slot_world_centres(dst, soa, tile)
+
+    # East tail lives near the right edge of tile (1,0):
+    # centre (1.5 * T, 0.5 * T) + (0.875 - 0.5) * T * (1, 0) = (1.875 T, 0.5 T)
+    assert swx[0] == pytest.approx(1.875 * tile)
+    assert swy[0] == pytest.approx(0.5 * tile)
+    # South head lives near the top of tile (2,0):
+    # centre (2.5 T, 0.5 T) + (0.125 - 0.5) * T * (0, 1) = (2.5 T, 0.125 T)
+    assert dwx[0] == pytest.approx(2.5 * tile)
+    assert dwy[0] == pytest.approx(0.125 * tile)
+
+    # The midpoint lerp (sim_alpha = 0.5) must land *inside* the union of
+    # the two tiles, never on the original east-tile path nor above the
+    # south tile -- i.e. somewhere on the diagonal between them.
+    mid_x = swx[0] + (dwx[0] - swx[0]) * 0.5
+    mid_y = swy[0] + (dwy[0] - swy[0]) * 0.5
+    assert 1.875 * tile < mid_x < 2.5 * tile
+    assert 0.125 * tile < mid_y < 0.5 * tile
+
+
+def test_turn_records_prev_slot_idx_pointing_at_upstream_belt() -> None:
+    """At a right-angle turn, the slot that just received an item must
+    record its source as the upstream belt's tail slot (not an in-belt
+    neighbour on the turn tile). The renderer uses this to interpolate
+    diagonally across the corner instead of teleporting."""
+    belts = [
+        ConveyorBelt((0, 0), Direction.E),
+        ConveyorBelt((1, 0), Direction.E),
+        ConveyorBelt((2, 0), Direction.S),  # turn tile
+    ]
+    soa = build_chains(belts)
+    # Belt layout within the single chain: [belt0][belt1][belt2], 4 slots
+    # each. Park an item on slot 7 (tail of belt 1 east). After one tick
+    # it must move to slot 8 (head of belt 2 south) and prev_slot_idx[8]
+    # must point at slot 7 so the renderer picks up the east tile's tail
+    # world centre as the interpolation source.
+    soa.slots[7] = 3
+    soa.tick()
+    assert soa.slots[7] == 0
+    assert soa.slots[8] == 3
+    assert int(soa.prev_slot_idx[8]) == 7
+    # And the belt metadata really does describe a direction change here:
+    assert int(soa.slot_belt_idx[7]) != int(soa.slot_belt_idx[8])
+    assert int(soa.belt_dir[int(soa.slot_belt_idx[7])]) != int(
+        soa.belt_dir[int(soa.slot_belt_idx[8])]
+    )
+
+
 def test_items_persist_across_belt_placement_elsewhere() -> None:
     """Placing a disconnected belt must not wipe existing items."""
     events = EventBus()

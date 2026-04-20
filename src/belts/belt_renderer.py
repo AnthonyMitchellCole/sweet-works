@@ -74,6 +74,36 @@ def draw_belts_batch(
     return int(visible_belts.size)
 
 
+def _slot_world_centres(
+    slot_indices: np.ndarray,
+    chains: BeltChainsSoA,
+    tile: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Vectorised world-space centre (``x``, ``y``) for each global slot idx.
+
+    Uses the per-slot ``slot_belt_idx`` back-pointer so the caller can
+    resolve *any* slot on the map (including the prior-tick source slot
+    of an item that just crossed a turn or a chain handoff), not just
+    those in the current chain.
+    """
+    belt_i = chains.slot_belt_idx[slot_indices]
+    belt_start = chains.belt_local_start[belt_i]
+    within = (slot_indices - belt_start).astype(np.float32)
+    bpos = chains.belt_pos[belt_i]
+    bdir = chains.belt_dir[belt_i]
+    dir_vecs = _DIR_VEC[bdir]
+
+    # Slot centre in tile-local space sweeps [-0.5, +0.5] along the belt's
+    # direction vector for local indices 0..SLOTS_PER_BELT-1.
+    t_within = (within + 0.5) / SLOTS_PER_BELT - 0.5
+    cx = bpos[:, 0].astype(np.float32) * tile + tile * 0.5
+    cy = bpos[:, 1].astype(np.float32) * tile + tile * 0.5
+
+    wx = cx + t_within * tile * dir_vecs[:, 0]
+    wy = cy + t_within * tile * dir_vecs[:, 1]
+    return wx, wy
+
+
 def draw_items_batch(
     surface: pygame.Surface,
     chains: BeltChainsSoA,
@@ -82,13 +112,22 @@ def draw_items_batch(
     assets: AssetLoader,
     sim_alpha: float,
 ) -> int:
-    """Draw all items on every visible chain. Returns visible-item count."""
+    """Draw all items on every visible chain. Returns visible-item count.
+
+    Interpolation strategy: every item's current slot is resolved to a
+    world-space centre via ``_slot_world_centres``. If the simulation
+    recorded a source slot last tick (``prev_slot_idx[i] >= 0``) we also
+    resolve that position and lerp between them. This renders straight
+    belt propagation as a constant-velocity slide *and* direction-change
+    turns as a smooth diagonal through the corner tile, instead of
+    teleporting onto the new belt's starting slot.
+    """
     if visible_chains.size == 0 or chains.total_slots == 0:
         return 0
 
     slots = chains.slots
     offsets = chains.chain_offset
-    prev_off = chains.prev_offset
+    prev_slot_idx = chains.prev_slot_idx
 
     tile = config.TILE
     zoom = camera.zoom
@@ -96,62 +135,41 @@ def draw_items_batch(
     a = max(0.0, min(1.0, sim_alpha))
 
     total_drawn = 0
-
-    # Pre-compute a map of item type_id -> scaled sprite (reused across chains).
     sprites_by_tid: dict[int, pygame.Surface] = {}
 
     for k in visible_chains:
         k = int(k)
         off0 = int(offsets[k])
         off1 = int(offsets[k + 1])
-        n = off1 - off0
-        if n == 0:
+        if off1 - off0 == 0:
             continue
         ck_slots = slots[off0:off1]
         occ_mask = ck_slots != EMPTY_ID
         if not np.any(occ_mask):
             continue
 
-        # Find which belts make up this chain.
-        belt_mask = chains.belt_chain == k
-        belt_positions = chains.belt_pos[belt_mask]
-        belt_dirs = chains.belt_dir[belt_mask]
+        occ_local = np.flatnonzero(occ_mask)
+        occ_global = occ_local + off0
 
-        # For every occupied slot we need (world_x, world_y) for the item
-        # center, interpolated against the previous-tick offset.
-        occ_idx = np.flatnonzero(occ_mask)
-        belt_of_slot = occ_idx // SLOTS_PER_BELT
-        within_belt = occ_idx % SLOTS_PER_BELT
+        curr_wx, curr_wy = _slot_world_centres(occ_global, chains, tile)
 
-        bpos = belt_positions[belt_of_slot]
-        bdir = belt_dirs[belt_of_slot]
-        dir_vecs = _DIR_VEC[bdir]
-
-        # t_now is the position along the tile (0..1) at current tick: the
-        # centre of slot i on a 4-slot belt is (i + 0.5) / 4. The previous
-        # tick's position is computed from prev_offset.
-        t_now = (within_belt.astype(np.float32) + 0.5) / SLOTS_PER_BELT
-        prev_shift = prev_off[occ_idx + off0].astype(np.float32) / SLOTS_PER_BELT
-        t_prev = t_now + prev_shift
-        t = t_prev + (t_now - t_prev) * a
-
-        # World-space center of the tile.
-        cxw = bpos[:, 0].astype(np.float32) * tile + tile * 0.5
-        cyw = bpos[:, 1].astype(np.float32) * tile + tile * 0.5
-
-        # Offset along the belt direction. t - 0.5 sweeps [-0.5, +0.5]
-        # and gets scaled by TILE + belt direction vector.
-        offset_world = (t - 0.5).reshape(-1, 1) * tile * dir_vecs
-
-        wx = cxw + offset_world[:, 0]
-        wy = cyw + offset_world[:, 1]
+        # Resolve per-item source positions. Slots with a recorded source
+        # interpolate from the source centre; static slots (prev == -1)
+        # stay at the current centre regardless of ``sim_alpha``.
+        prev_g = prev_slot_idx[occ_global]
+        has_prev = prev_g >= 0
+        wx = curr_wx.copy()
+        wy = curr_wy.copy()
+        if has_prev.any():
+            src_idx = prev_g[has_prev].astype(np.int64, copy=False)
+            pwx, pwy = _slot_world_centres(src_idx, chains, tile)
+            wx[has_prev] = pwx + (curr_wx[has_prev] - pwx) * a
+            wy[has_prev] = pwy + (curr_wy[has_prev] - pwy) * a
 
         sx = ((wx - cam_x) * zoom).astype(np.int32)
         sy = ((wy - cam_y) * zoom).astype(np.int32)
 
-        tids = ck_slots[occ_idx]
-
-        # Blit by item type_id so each surface.blits call shares a sprite.
+        tids = ck_slots[occ_local]
         unique_tids = np.unique(tids)
         for tid in unique_tids:
             tid_i = int(tid)
