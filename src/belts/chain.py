@@ -79,6 +79,13 @@ class BeltChainsSoA:
     belt_pos: np.ndarray          # int32, shape (B, 2)   world-tile (x, y).
     belt_dir: np.ndarray          # int8,  shape (B,)     0 = E, 1 = N, 2 = W, 3 = S.
 
+    # Per-belt: True if the belt's upstream predecessor (inside the chain or
+    # across a chain-to-chain handoff) faces a different direction. The
+    # renderer uses this to re-space this belt's slot centres so an item
+    # arriving from a perpendicular belt lands near the tile centre instead
+    # of the leading edge (see ``_slot_world_centres`` in belt_renderer.py).
+    belt_is_turn_receiver: np.ndarray  # bool, shape (B,).
+
     # Per-slot back-pointer to owning belt index. Pre-computed; enables
     # O(1) vectorised "which belt owns this slot?" lookups in the renderer.
     slot_belt_idx: np.ndarray     # int32, shape (total_slots,).
@@ -116,6 +123,7 @@ class BeltChainsSoA:
             belt_local_start=zero_i32,
             belt_pos=np.zeros((0, 2), dtype=np.int32),
             belt_dir=zero_i8,
+            belt_is_turn_receiver=zero_bool,
             slot_belt_idx=zero_i32,
         )
 

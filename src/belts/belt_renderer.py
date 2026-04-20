@@ -85,17 +85,35 @@ def _slot_world_centres(
     resolve *any* slot on the map (including the prior-tick source slot
     of an item that just crossed a turn or a chain handoff), not just
     those in the current chain.
+
+    Slot placement within a belt:
+
+    - **Straight belts** evenly distribute the four slots across the full
+      tile: ``t_within`` sweeps ``[-3/8, -1/8, +1/8, +3/8]`` of the tile
+      length along the belt's direction, so slot 0 sits near the tile's
+      leading edge and slot 3 near its trailing edge.
+    - **Turn-receiver belts** (``belt_is_turn_receiver[i] == True``)
+      re-space their slots to ``[0, +1/8, +2/8, +3/8]`` -- slot 0 lands
+      exactly at the tile centre, which is where an item fed by a
+      perpendicular belt physically *is* (the feeding belt's centreline
+      runs through the turn tile's centre). Slot 3 stays at ``+3/8``, so
+      the exit boundary onto a downstream straight belt is still smooth.
     """
     belt_i = chains.slot_belt_idx[slot_indices]
     belt_start = chains.belt_local_start[belt_i]
     within = (slot_indices - belt_start).astype(np.float32)
     bpos = chains.belt_pos[belt_i]
     bdir = chains.belt_dir[belt_i]
+    is_turn = chains.belt_is_turn_receiver[belt_i]
     dir_vecs = _DIR_VEC[bdir]
 
-    # Slot centre in tile-local space sweeps [-0.5, +0.5] along the belt's
-    # direction vector for local indices 0..SLOTS_PER_BELT-1.
-    t_within = (within + 0.5) / SLOTS_PER_BELT - 0.5
+    # Normal slot positions sweep [-0.5, +0.5] along the belt's direction.
+    straight_t = (within + 0.5) / SLOTS_PER_BELT - 0.5
+    # Turn-receiver slots start at tile centre (t_within = 0) and march
+    # forward in TILE / (2 * SLOTS_PER_BELT) = 1/8 tile steps.
+    turn_t = within / (2.0 * SLOTS_PER_BELT)
+    t_within = np.where(is_turn, turn_t, straight_t)
+
     cx = bpos[:, 0].astype(np.float32) * tile + tile * 0.5
     cy = bpos[:, 1].astype(np.float32) * tile + tile * 0.5
 

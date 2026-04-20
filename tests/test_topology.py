@@ -190,10 +190,11 @@ def test_items_survive_turn_chain_tick() -> None:
     assert int((soa.slots == 5).sum()) <= 1
 
 
-def test_slot_world_centres_interpolates_turn_diagonally() -> None:
-    """The renderer helper must map a turning chain's slots to world
-    centres such that the cross-turn interpolation path is a short
-    diagonal through the corner tile, not a teleport."""
+def test_slot_world_centres_lands_turn_receiver_slot0_at_tile_centre() -> None:
+    """When an item crosses from an east belt onto a south belt, the
+    destination slot must render at the south tile's *centre*, not its
+    leading edge, so the item visually lines up with the y-coordinate of
+    the feeding east belt."""
     from src.belts.belt_renderer import _slot_world_centres
     from src.core import config
 
@@ -205,6 +206,10 @@ def test_slot_world_centres_interpolates_turn_diagonally() -> None:
     soa = build_chains(belts)
     tile = float(config.TILE)
 
+    # The south belt must be flagged as a turn receiver.
+    turn_belt_idx = int(soa.slot_belt_idx[8])
+    assert bool(soa.belt_is_turn_receiver[turn_belt_idx])
+
     # Source slot: tail of belt 1 (east), slot 7.
     src = np.array([7], dtype=np.int64)
     # Destination slot: head of belt 2 (south), slot 8.
@@ -213,22 +218,57 @@ def test_slot_world_centres_interpolates_turn_diagonally() -> None:
     swx, swy = _slot_world_centres(src, soa, tile)
     dwx, dwy = _slot_world_centres(dst, soa, tile)
 
-    # East tail lives near the right edge of tile (1,0):
-    # centre (1.5 * T, 0.5 * T) + (0.875 - 0.5) * T * (1, 0) = (1.875 T, 0.5 T)
+    # East tail lives near the right edge of tile (1, 0):
+    # centre (1.5 T, 0.5 T) + (0.875 - 0.5) * T * (1, 0) = (1.875 T, 0.5 T)
     assert swx[0] == pytest.approx(1.875 * tile)
     assert swy[0] == pytest.approx(0.5 * tile)
-    # South head lives near the top of tile (2,0):
-    # centre (2.5 T, 0.5 T) + (0.125 - 0.5) * T * (0, 1) = (2.5 T, 0.125 T)
+    # South turn-receiver slot 0 sits at the tile's *centre* along the
+    # belt direction -- y == 0.5 T, exactly matching the east tail's y.
     assert dwx[0] == pytest.approx(2.5 * tile)
-    assert dwy[0] == pytest.approx(0.125 * tile)
+    assert dwy[0] == pytest.approx(0.5 * tile)
 
-    # The midpoint lerp (sim_alpha = 0.5) must land *inside* the union of
-    # the two tiles, never on the original east-tile path nor above the
-    # south tile -- i.e. somewhere on the diagonal between them.
+    # The interpolation path is therefore a clean horizontal slide
+    # across the corner -- the item's y never changes and it ends at
+    # the tile centre.
     mid_x = swx[0] + (dwx[0] - swx[0]) * 0.5
     mid_y = swy[0] + (dwy[0] - swy[0]) * 0.5
-    assert 1.875 * tile < mid_x < 2.5 * tile
-    assert 0.125 * tile < mid_y < 0.5 * tile
+    assert mid_x == pytest.approx(2.1875 * tile)
+    assert mid_y == pytest.approx(0.5 * tile)
+
+
+def test_turn_receiver_subsequent_slots_stay_inside_tile_and_exit_cleanly() -> None:
+    """The re-spaced slots on a turn receiver must keep items inside the
+    tile *and* land slot 3 at the normal exit edge so the boundary onto
+    a downstream straight belt is smooth."""
+    from src.belts.belt_renderer import _slot_world_centres
+    from src.core import config
+
+    belts = [
+        ConveyorBelt((0, 0), Direction.E),
+        ConveyorBelt((1, 0), Direction.S),  # turn tile: belt 1
+        ConveyorBelt((1, 1), Direction.S),  # straight south belt: belt 2
+    ]
+    soa = build_chains(belts)
+    tile = float(config.TILE)
+
+    # Belt 1 is the turn receiver; belt 2 is a normal continuation.
+    assert bool(soa.belt_is_turn_receiver[1])
+    assert not bool(soa.belt_is_turn_receiver[2])
+
+    # Belt 1 owns slots 4..7. Query all four plus belt 2's head (slot 8).
+    idxs = np.array([4, 5, 6, 7, 8], dtype=np.int64)
+    wx, wy = _slot_world_centres(idxs, soa, tile)
+
+    # Turn-receiver slots sit at 1/2, 5/8, 3/4, 7/8 of tile 1 along south.
+    assert wy[0] == pytest.approx(tile * 0.5)   # slot 0: centre
+    assert wy[1] == pytest.approx(tile * 0.625)  # slot 1
+    assert wy[2] == pytest.approx(tile * 0.75)   # slot 2
+    assert wy[3] == pytest.approx(tile * 0.875)  # slot 3: normal exit edge
+    # Next belt's head slot is at y = tile_y * TILE + 0.125 T = 1.125 T.
+    assert wy[4] == pytest.approx(tile * 1.125)
+    # Gap from turn-slot 3 to the next belt's slot 0 is exactly one
+    # normal slot step (0.25 T), so exiting the turn tile is smooth.
+    assert (wy[4] - wy[3]) == pytest.approx(tile * 0.25)
 
 
 def test_turn_records_prev_slot_idx_pointing_at_upstream_belt() -> None:

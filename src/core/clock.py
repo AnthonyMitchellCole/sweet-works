@@ -21,6 +21,13 @@ class Clock:
         """0 = uncapped; positive integer caps the render loop."""
         self._fps_cap = max(0, fps)
 
+    def set_tick_hz(self, hz: int) -> None:
+        """Reconfigure the fixed-timestep simulation rate (Hz)."""
+        self._tick_dt = 1.0 / max(1, int(hz))
+        # Drop any accumulated debt that was measured against the old dt so
+        # we never replay a burst of ticks at the new rate.
+        self._accumulator = 0.0
+
     def tick(self) -> int:
         """Advance the frame timer and return pending sim ticks to run."""
         ms = self._pg.tick(self._fps_cap)

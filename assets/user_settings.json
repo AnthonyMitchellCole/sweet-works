@@ -1,0 +1,13 @@
+{
+  "belt_anim_hz": 8.0,
+  "camera_drag_inertia_decay": 6.0,
+  "camera_pan_speed": 480.0,
+  "camera_smooth": 12.0,
+  "default_zoom": 1.0,
+  "fps_cap": 0,
+  "fullscreen": false,
+  "structure_anim_hz": 6.0,
+  "tick_hz": 20,
+  "window_h": 1440,
+  "window_w": 2560
+}

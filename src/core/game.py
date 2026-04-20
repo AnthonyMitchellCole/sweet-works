@@ -8,10 +8,12 @@ import pygame
 
 from ..assets.loader import AssetLoader
 from . import config
+from . import settings as settings_mod
 from .clock import Clock
 from .events import EventBus
 from .input import Input
 from .perf import PERF, timed
+from .settings import UserSettings
 
 if TYPE_CHECKING:
     from ..scenes.scene import Scene
@@ -21,8 +23,17 @@ class Game:
     def __init__(self) -> None:
         pygame.init()
         pygame.display.set_caption(config.TITLE)
-        flags = pygame.RESIZABLE if config.RESIZABLE else 0
-        self.screen: pygame.Surface = pygame.display.set_mode(config.WINDOW, flags)
+
+        # Load persisted user settings and fold them into ``config`` before
+        # we construct anything that reads from it (Clock, AssetLoader caches
+        # sized by config, etc.).
+        self.settings: UserSettings = settings_mod.load()
+        settings_mod.apply_to_config(self.settings)
+
+        self._fullscreen: bool = bool(self.settings.fullscreen)
+        self.screen: pygame.Surface = pygame.display.set_mode(
+            (config.WINDOW_W, config.WINDOW_H), self._display_flags()
+        )
 
         self.assets = AssetLoader()
         self.assets.prepare()
@@ -65,13 +76,39 @@ class Game:
 
     # -- window ------------------------------------------------------------
 
+    def _display_flags(self) -> int:
+        flags = 0
+        if config.RESIZABLE and not self._fullscreen:
+            flags |= pygame.RESIZABLE
+        if self._fullscreen:
+            flags |= pygame.FULLSCREEN
+        return flags
+
     def _on_resize(self, w: int, h: int) -> None:
         w = max(config.MIN_WINDOW_W, w)
         h = max(config.MIN_WINDOW_H, h)
-        flags = pygame.RESIZABLE if config.RESIZABLE else 0
-        self.screen = pygame.display.set_mode((w, h), flags)
+        self.screen = pygame.display.set_mode((w, h), self._display_flags())
         for scene in self._scenes:
             scene.on_resize((w, h))
+
+    def apply_display(self, w: int, h: int, fullscreen: bool) -> None:
+        """Rebuild the window with the given size / fullscreen flag."""
+        w = max(config.MIN_WINDOW_W, int(w))
+        h = max(config.MIN_WINDOW_H, int(h))
+        self._fullscreen = bool(fullscreen)
+        self.screen = pygame.display.set_mode((w, h), self._display_flags())
+        for scene in self._scenes:
+            scene.on_resize(self.screen.get_size())
+
+    def apply_settings(self, new: UserSettings, *, persist: bool = True) -> None:
+        """Persist and apply a new :class:`UserSettings` to the live game."""
+        self.settings = new
+        if persist:
+            try:
+                settings_mod.save(new)
+            except OSError:
+                pass
+        settings_mod.apply(new, self)
 
     @property
     def window_size(self) -> tuple[int, int]:

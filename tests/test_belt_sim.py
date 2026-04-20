@@ -60,6 +60,7 @@ def _single_chain(n_belts: int) -> BeltChainsSoA:
         belt_local_start=belt_local_start,
         belt_pos=belt_pos,
         belt_dir=belt_dir,
+        belt_is_turn_receiver=np.zeros(n_belts, dtype=bool),
         slot_belt_idx=slot_belt_idx,
     )
 
@@ -111,6 +112,7 @@ def _two_chain_handoff(n1: int, n2: int) -> BeltChainsSoA:
         belt_local_start=belt_local_start,
         belt_pos=belt_pos,
         belt_dir=belt_dir,
+        belt_is_turn_receiver=np.zeros(n_belts, dtype=bool),
         slot_belt_idx=slot_belt_idx,
     )
 

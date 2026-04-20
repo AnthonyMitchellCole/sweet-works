@@ -185,6 +185,33 @@ def build_chains(belts: Iterable[ConveyorBelt], world: World | None = None) -> B
     # -- 8. Boundary mask for vectorised propagation -----------------------
     boundary_mask = compute_boundary_mask(chain_offset, total_slots)
 
+    # -- 8b. Turn-receiver flag per belt ------------------------------------
+    # A belt is a "turn receiver" if the belt that feeds it (its chain-
+    # internal predecessor, or its owning chain's upstream feeder across
+    # a cross-chain handoff) faces a different direction. The renderer
+    # uses this to shift the belt's slot centres so an item arriving via
+    # a direction change lands near the tile centre instead of the
+    # leading edge -- the visual "lines up with where it came from".
+    belt_is_turn_receiver = np.zeros(B, dtype=bool)
+    for k, chain in enumerate(chains):
+        for i in range(1, len(chain)):
+            prev_idx = belt_idx_of_pos[chain[i - 1]]
+            curr_idx = belt_idx_of_pos[chain[i]]
+            if belt_dir_arr[prev_idx] != belt_dir_arr[curr_idx]:
+                belt_is_turn_receiver[curr_idx] = True
+    # Chain-to-chain handoffs: the first belt of ``succ`` receives from
+    # the last belt of ``k``. Mark it if their directions differ.
+    # We want the reverse mapping (predecessor for each chain), so walk
+    # the succ array forwards and index into the successor chain's head.
+    for k in range(C):
+        sc = int(chain_succ_chain[k])
+        if sc < 0:
+            continue
+        k_last = belt_idx_of_pos[chains[k][-1]]
+        sc_first = belt_idx_of_pos[chains[sc][0]]
+        if belt_dir_arr[k_last] != belt_dir_arr[sc_first]:
+            belt_is_turn_receiver[sc_first] = True
+
     # -- 9. Assemble SoA ----------------------------------------------------
     slots = np.zeros(total_slots, dtype=np.int16)
     prev_slots = np.zeros(total_slots, dtype=np.int16)
@@ -208,6 +235,7 @@ def build_chains(belts: Iterable[ConveyorBelt], world: World | None = None) -> B
         belt_local_start=belt_local_start_arr,
         belt_pos=belt_pos_arr,
         belt_dir=belt_dir_arr,
+        belt_is_turn_receiver=belt_is_turn_receiver,
         slot_belt_idx=slot_belt_idx,
         ports=port_list if port_list else None,
     )
@@ -335,6 +363,7 @@ def build_benchmark(
         belt_local_start=belt_local_start,
         belt_pos=belt_pos,
         belt_dir=belt_dir,
+        belt_is_turn_receiver=np.zeros(B, dtype=bool),
         slot_belt_idx=slot_belt_idx,
         auto_sink_chains=np.arange(n_chains, dtype=np.int32),
         auto_source_chains=np.arange(n_chains, dtype=np.int32),
