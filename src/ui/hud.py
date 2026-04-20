@@ -722,9 +722,6 @@ class HUD:
         )
         self._cells: list[_Cell] = [_Cell(item=t) for t in tracked]
         self._counts: dict[str, int] = {t.id: 0 for t in tracked}
-        self._pulses: dict[str, AnimValue] = {
-            t.id: AnimValue(value=0.0, speed=10.0) for t in tracked
-        }
         self._rates: dict[str, RateTracker] = {t.id: RateTracker() for t in tracked}
 
         self._off_produced = events.on("item.produced", self._on_produced)
@@ -755,10 +752,6 @@ class HUD:
 
     def _on_produced(self, item_type: ItemType) -> None:
         self._counts[item_type.id] = self._counts.get(item_type.id, 0) + 1
-        p = self._pulses.get(item_type.id)
-        if p is not None:
-            p.value = 1.0
-            p.to(0.0)
         tracker = self._rates.get(item_type.id)
         if tracker is not None:
             tracker.add_produced(1)
@@ -781,8 +774,6 @@ class HUD:
         mouse_down: bool = False,
         mouse_released: bool = False,
     ) -> None:
-        for p in self._pulses.values():
-            p.update(dt)
         for tracker in self._rates.values():
             tracker.tick_time(world_time)
 
@@ -854,9 +845,8 @@ class HUD:
 
         x = rect.x + THEME.spacing.md + title.get_width() + THEME.spacing.xl
         for cell in self._cells:
-            pulse = self._pulses[cell.item.id].value
             x = self._render_resource(
-                surface, rect, x, cell, self._counts[cell.item.id], pulse
+                surface, rect, x, cell, self._counts[cell.item.id]
             )
 
         fps_surf = self.assets.render_text(f"{int(fps):>3} FPS", TYPE.mono, PALETTE.muted)
@@ -900,7 +890,6 @@ class HUD:
         x: int,
         cell: _Cell,
         count: int,
-        pulse: float,
     ) -> int:
         item_type = cell.item
         hover = cell.hover.value
@@ -947,17 +936,6 @@ class HUD:
                         (cell.rect.x, cell.rect.bottom - 2),
                         special_flags=pygame.BLEND_PREMULTIPLIED,
                     )
-
-        # Produce pulse: unchanged legacy halo just behind the icon.
-        if pulse > 0.02:
-            pulse_size = (icon.get_width() + 6, icon.get_height() + 6)
-            with acquired(pulse_size) as p_halo:
-                p_halo.fill(with_alpha(item_type.color, int(pulse * 140)))
-                surface.blit(
-                    p_halo,
-                    (x - 3, icon_y - 3),
-                    special_flags=pygame.BLEND_PREMULTIPLIED,
-                )
 
         surface.blit(icon, (x, icon_y))
         surface.blit(count_surf, (tx, ty))
