@@ -11,11 +11,13 @@ clock + display in place.
 from __future__ import annotations
 
 import math
+import random
 from dataclasses import replace
 from typing import Any
 
 import pygame
 
+from ..audio.sfx import SFX
 from ..core import settings as settings_mod
 from ..core.settings import UserSettings
 from ..design.palette import PALETTE, lighten, with_alpha
@@ -76,11 +78,12 @@ def _find_index(values: tuple[Any, ...], target: Any, *, default: int = 0) -> in
 
 # Per-section reveal window (start, end) within ``self._reveal_anim.value``.
 _PHASES: tuple[tuple[float, float], ...] = (
-    (0.00, 0.35),  # header
-    (0.10, 0.50),  # display
-    (0.22, 0.62),  # simulation
-    (0.34, 0.74),  # camera
-    (0.50, 0.90),  # action bar
+    (0.00, 0.35),  # 0 header
+    (0.10, 0.50),  # 1 display
+    (0.22, 0.62),  # 2 simulation
+    (0.34, 0.74),  # 3 camera
+    (0.46, 0.86),  # 4 audio
+    (0.58, 0.96),  # 5 action bar
 )
 
 
@@ -88,6 +91,69 @@ def _phase(reveal: float, start: float, end: float) -> float:
     if end <= start:
         return 1.0
     return max(0.0, min(1.0, (reveal - start) / (end - start)))
+
+
+class _VuMeter:
+    """Tiny bar cluster that pulses on every successful SFX playback.
+
+    Each played cue excites a random subset of bars with a short burst
+    driven by :class:`AnimValue`; a gentle sinusoidal wobble keeps the
+    meter alive even when idle, so the AUDIO section always feels
+    attentive. Pure visual -- never influences playback.
+    """
+
+    BARS: int = 6
+
+    def __init__(self) -> None:
+        self.rect = pygame.Rect(0, 0, 0, 0)
+        self._pulses: list[AnimValue] = [
+            AnimValue(value=0.0, speed=8.5) for _ in range(self.BARS)
+        ]
+        self._phase: tuple[float, ...] = tuple(
+            i * (math.pi * 2 / self.BARS) for i in range(self.BARS)
+        )
+        self._rng = random.Random(0xAED10)
+
+    def set_rect(self, rect: pygame.Rect) -> None:
+        self.rect = rect
+
+    def kick(self, strength: float = 1.0) -> None:
+        for p in self._pulses:
+            jitter = self._rng.uniform(0.55, 1.0) * strength
+            p.value = min(1.2, p.value + jitter)
+            p.to(0.0)
+
+    def update(self, dt: float) -> None:
+        for p in self._pulses:
+            p.update(dt)
+
+    def render(self, surface: pygame.Surface, t: float, reveal: float) -> None:
+        if reveal <= 0.01 or self.rect.w <= 0 or self.rect.h <= 0:
+            return
+        gap = max(1, self.rect.w // (self.BARS * 3))
+        bar_w = max(2, (self.rect.w - gap * (self.BARS - 1)) // self.BARS)
+        total_w = bar_w * self.BARS + gap * (self.BARS - 1)
+        x0 = self.rect.x + (self.rect.w - total_w) // 2
+        base_y = self.rect.bottom
+        idle_floor = 0.10
+        for i, p in enumerate(self._pulses):
+            amp = max(0.0, min(1.4, p.value))
+            wobble = 0.18 * (idle_floor + amp) * math.sin(t * 5.0 + self._phase[i])
+            raw = max(idle_floor, amp + wobble)
+            h = int(round(self.rect.h * raw * reveal))
+            h = max(2, min(self.rect.h, h))
+            x = x0 + i * (bar_w + gap)
+            y = base_y - h
+            hot = amp * reveal
+            col = lighten(PALETTE.primary, 0.15 + 0.35 * hot)
+            pygame.draw.rect(surface, col, pygame.Rect(x, y, bar_w, h))
+            # Soft top cap for a CRT-ish bloom.
+            if hot > 0.25:
+                pygame.draw.rect(
+                    surface,
+                    PALETTE.text_strong,
+                    pygame.Rect(x, y, bar_w, max(1, h // 10)),
+                )
 
 
 class SettingsScene(Scene):
@@ -112,6 +178,7 @@ class SettingsScene(Scene):
         self._section_display: Section | None = None
         self._section_sim: Section | None = None
         self._section_camera: Section | None = None
+        self._section_audio: Section | None = None
 
         # Controls (created lazily in layout())
         self._res: Stepper | None = None
@@ -126,6 +193,17 @@ class SettingsScene(Scene):
         self._smooth: Slider | None = None
         self._drag: Slider | None = None
         self._zoom: Slider | None = None
+
+        self._mute: Toggle | None = None
+        self._master: Slider | None = None
+        self._sfx_vol: Slider | None = None
+        self._ui_sounds: Toggle | None = None
+        self._world_sounds: Toggle | None = None
+        self._sim_sounds: Toggle | None = None
+        self._btn_test: Button | None = None
+
+        self._vu: _VuMeter = _VuMeter()
+        self._off_audio_played: Any = None
 
         self._btn_back: Button | None = None
         self._btn_reset: Button | None = None
@@ -148,8 +226,22 @@ class SettingsScene(Scene):
         self._apply_pulse.done = True
         self._build(self.game.window_size)
 
+        if self._off_audio_played is None:
+            self._off_audio_played = SFX.on_played(self._on_sfx_played)
+        SFX.play("ui.open")
+
+    def on_exit(self) -> None:
+        if self._off_audio_played is not None:
+            self._off_audio_played()
+            self._off_audio_played = None
+
     def on_resize(self, size: tuple[int, int]) -> None:
         self._build(size)
+
+    # -- audio feedback ----------------------------------------------------
+
+    def _on_sfx_played(self, _cue_id: str) -> None:
+        self._vu.kick(strength=1.0)
 
     # -- events ------------------------------------------------------------
 
@@ -166,8 +258,14 @@ class SettingsScene(Scene):
         self._reveal.update(dt)
         self._fade_in.update(dt)
         self._apply_pulse.update(dt)
+        self._vu.update(dt)
 
-        for sec in (self._section_display, self._section_sim, self._section_camera):
+        for sec in (
+            self._section_display,
+            self._section_sim,
+            self._section_camera,
+            self._section_audio,
+        ):
             if sec is not None:
                 sec.update(dt)
 
@@ -220,6 +318,7 @@ class SettingsScene(Scene):
         disp_rows = 3
         sim_rows = 3
         cam_rows = 4
+        audio_rows = 6
 
         def section_height(rows: int) -> int:
             return Section.HEADER_H + Section.PAD * 2 + _ROW_H * rows
@@ -227,6 +326,7 @@ class SettingsScene(Scene):
         disp_h = section_height(disp_rows)
         sim_h = section_height(sim_rows)
         cam_h = section_height(cam_rows)
+        audio_h = section_height(audio_rows)
 
         self._section_display = Section(
             pygame.Rect(col_x, y, col_w, disp_h), "DISPLAY"
@@ -240,6 +340,10 @@ class SettingsScene(Scene):
             pygame.Rect(col_x, y, col_w, cam_h), "CAMERA"
         )
         y += cam_h + _SECTION_GAP
+        self._section_audio = Section(
+            pygame.Rect(col_x, y, col_w, audio_h), "AUDIO"
+        )
+        y += audio_h + _SECTION_GAP
 
         # Ensure there's room for the action bar; if not, we still render it
         # at the bottom and the content can scroll off (we keep a simple
@@ -249,7 +353,21 @@ class SettingsScene(Scene):
         self._build_display_controls(self._section_display)
         self._build_sim_controls(self._section_sim)
         self._build_camera_controls(self._section_camera)
+        self._build_audio_controls(self._section_audio)
         self._build_actions(size)
+
+        # Position the VU meter along the audio section's header rule.
+        header_y = self._section_audio.rect.y
+        vu_w = 120
+        vu_h = Section.HEADER_H - 10
+        self._vu.set_rect(
+            pygame.Rect(
+                self._section_audio.rect.right - vu_w - 8,
+                header_y + 4,
+                vu_w,
+                vu_h,
+            )
+        )
 
         self._refresh_controls_from_draft()
 
@@ -264,6 +382,13 @@ class SettingsScene(Scene):
             self._smooth,
             self._drag,
             self._zoom,
+            self._mute,
+            self._master,
+            self._sfx_vol,
+            self._ui_sounds,
+            self._world_sounds,
+            self._sim_sounds,
+            self._btn_test,
             self._btn_back,
             self._btn_reset,
             self._btn_apply,
@@ -370,6 +495,69 @@ class SettingsScene(Scene):
             on_change=self._on_zoom_change,
         )
 
+    def _build_audio_controls(self, section: Section) -> None:
+        # Row 0: Mute toggle (aligned like the fullscreen toggle).
+        mute_rect = self._control_rect(section, 0)
+        self._mute = Toggle(
+            (mute_rect.x, mute_rect.y + (mute_rect.h - Toggle.HEIGHT) // 2),
+            self._draft.audio_muted,
+            on_change=self._on_mute_change,
+        )
+        # Row 1: Master volume
+        self._master = Slider(
+            self._control_rect(section, 1),
+            vmin=0.0,
+            vmax=1.0,
+            value=float(self._draft.audio_master),
+            step=0.01,
+            format=lambda v: f"{int(round(v * 100))}%",
+            on_change=self._on_master_change,
+        )
+        # Row 2: SFX volume
+        self._sfx_vol = Slider(
+            self._control_rect(section, 2),
+            vmin=0.0,
+            vmax=1.0,
+            value=float(self._draft.audio_sfx),
+            step=0.01,
+            format=lambda v: f"{int(round(v * 100))}%",
+            on_change=self._on_sfx_vol_change,
+        )
+        # Row 3: UI sounds toggle
+        ui_rect = self._control_rect(section, 3)
+        self._ui_sounds = Toggle(
+            (ui_rect.x, ui_rect.y + (ui_rect.h - Toggle.HEIGHT) // 2),
+            self._draft.audio_ui,
+            on_change=self._on_ui_sounds_change,
+        )
+        # Row 4: World sounds toggle
+        world_rect = self._control_rect(section, 4)
+        self._world_sounds = Toggle(
+            (world_rect.x, world_rect.y + (world_rect.h - Toggle.HEIGHT) // 2),
+            self._draft.audio_world,
+            on_change=self._on_world_sounds_change,
+        )
+        # Row 5: Sim sounds toggle on the left, Test button on the right.
+        sim_rect = self._control_rect(section, 5)
+        self._sim_sounds = Toggle(
+            (sim_rect.x, sim_rect.y + (sim_rect.h - Toggle.HEIGHT) // 2),
+            self._draft.audio_sim,
+            on_change=self._on_sim_sounds_change,
+        )
+        btn_w = 104
+        btn_h = 30
+        self._btn_test = Button(
+            pygame.Rect(
+                sim_rect.right - btn_w,
+                sim_rect.y + (sim_rect.h - btn_h) // 2,
+                btn_w,
+                btn_h,
+            ),
+            "TEST",
+            kind="ghost",
+            on_click=self._on_audio_test,
+        )
+
     def _build_actions(self, size: tuple[int, int]) -> None:
         w, h = size
         # Action bar: centered row at the bottom.
@@ -422,6 +610,18 @@ class SettingsScene(Scene):
             self._drag.set_value(float(s.camera_drag_inertia_decay), notify=False)
         if self._zoom is not None:
             self._zoom.set_value(float(s.default_zoom), notify=False)
+        if self._mute is not None:
+            self._mute.set_value(s.audio_muted, notify=False)
+        if self._master is not None:
+            self._master.set_value(float(s.audio_master), notify=False)
+        if self._sfx_vol is not None:
+            self._sfx_vol.set_value(float(s.audio_sfx), notify=False)
+        if self._ui_sounds is not None:
+            self._ui_sounds.set_value(s.audio_ui, notify=False)
+        if self._world_sounds is not None:
+            self._world_sounds.set_value(s.audio_world, notify=False)
+        if self._sim_sounds is not None:
+            self._sim_sounds.set_value(s.audio_sim, notify=False)
 
     # -- draft mutators ----------------------------------------------------
 
@@ -458,6 +658,41 @@ class SettingsScene(Scene):
     def _on_zoom_change(self, v: float) -> None:
         self._mutate(default_zoom=float(v))
 
+    # -- audio mutators (push live to SFX so tuning is tactile) -----------
+
+    def _push_audio_live(self) -> None:
+        """Route draft audio settings into ``SFX`` without persisting."""
+        SFX.apply_settings(self._draft)
+
+    def _on_mute_change(self, v: bool) -> None:
+        self._mutate(audio_muted=bool(v))
+        self._push_audio_live()
+
+    def _on_master_change(self, v: float) -> None:
+        self._mutate(audio_master=float(v))
+        self._push_audio_live()
+
+    def _on_sfx_vol_change(self, v: float) -> None:
+        self._mutate(audio_sfx=float(v))
+        self._push_audio_live()
+
+    def _on_ui_sounds_change(self, v: bool) -> None:
+        self._mutate(audio_ui=bool(v))
+        self._push_audio_live()
+
+    def _on_world_sounds_change(self, v: bool) -> None:
+        self._mutate(audio_world=bool(v))
+        self._push_audio_live()
+
+    def _on_sim_sounds_change(self, v: bool) -> None:
+        self._mutate(audio_sim=bool(v))
+        self._push_audio_live()
+
+    def _on_audio_test(self) -> None:
+        """Play a short cue chord so users can confirm the current mix."""
+        SFX.play("ui.click")
+        SFX.play("ui.slider_tick")
+
     # -- actions -----------------------------------------------------------
 
     def _is_dirty(self) -> bool:
@@ -475,18 +710,29 @@ class SettingsScene(Scene):
         # Rebuild layout in case the window was resized by the apply.
         if self.game is not None:
             self._build(self.game.window_size)
+        # Chord for a "committed" feel; throttles inside SFX keep it subtle.
+        SFX.play("ui.toggle_on")
+        SFX.play("ui.click")
 
     def _reset_defaults(self) -> None:
         self._draft = settings_mod.defaults()
         self._refresh_controls_from_draft()
+        self._push_audio_live()
+        SFX.play("ui.click_soft")
 
     def _go_back(self) -> None:
         if self._closing:
             return
+        # If the user abandons unsaved audio tweaks, restore the live SFX
+        # state to what's actually persisted so the rest of the game doesn't
+        # hear the draft.
+        if self._is_dirty():
+            SFX.apply_settings(self._applied)
         self._closing = True
         self._close_tween = Tween(
             start=0.0, end=1.0, duration=THEME.anim.base, ease=THEME.anim.ease_in_out
         )
+        SFX.play("ui.close")
 
     # -- render helpers ----------------------------------------------------
 
@@ -547,6 +793,7 @@ class SettingsScene(Scene):
             (self._section_display, _PHASES[1]),
             (self._section_sim, _PHASES[2]),
             (self._section_camera, _PHASES[3]),
+            (self._section_audio, _PHASES[4]),
         )
         for section, phase in sections:
             if section is None:
@@ -554,6 +801,11 @@ class SettingsScene(Scene):
             t = _phase(self._reveal.value, *phase)
             section.set_reveal(t)
             section.render(surface, assets)
+
+        # Overlay the VU meter on the AUDIO section header rule.
+        if self._section_audio is not None:
+            audio_reveal = _phase(self._reveal.value, *_PHASES[4])
+            self._vu.render(surface, self._t, audio_reveal)
 
     def _render_controls(self, surface: pygame.Surface) -> None:
         assert self.game is not None
@@ -574,8 +826,24 @@ class SettingsScene(Scene):
         self._render_row(surface, self._section_camera, 2, "Drag inertia decay", self._drag)
         self._render_row(surface, self._section_camera, 3, "Default zoom", self._zoom)
 
+        self._render_row(surface, self._section_audio, 0, "Mute", self._mute)
+        self._render_row(surface, self._section_audio, 1, "Master volume", self._master)
+        self._render_row(surface, self._section_audio, 2, "SFX volume", self._sfx_vol)
+        self._render_row(surface, self._section_audio, 3, "UI sounds", self._ui_sounds)
+        self._render_row(surface, self._section_audio, 4, "World sounds", self._world_sounds)
+        self._render_row(surface, self._section_audio, 5, "Simulation ticks", self._sim_sounds)
+        # Test button shares the Sim-toggle row on the right. Render it
+        # after the row so it overlaps any trailing slider label cleanly.
+        if self._btn_test is not None:
+            self._btn_test.render(surface, assets)
+
         # Light divider between label column and control column.
-        for sec in (self._section_display, self._section_sim, self._section_camera):
+        for sec in (
+            self._section_display,
+            self._section_sim,
+            self._section_camera,
+            self._section_audio,
+        ):
             if sec is None:
                 continue
             body = sec.body_rect()
@@ -610,7 +878,7 @@ class SettingsScene(Scene):
         assert self.game is not None
         assets = self.game.assets
 
-        start, end = _PHASES[4]
+        start, end = _PHASES[5]
         e = THEME.anim.ease_out(_phase(self._reveal.value, start, end))
         if e <= 0.0:
             return

@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Generic, TypeVar
 
 import pygame
 
+from ..audio.sfx import SFX
 from ..design.palette import PALETTE, Color, lighten, with_alpha
 from ..design.theme import THEME
 from ..design.typography import TYPE
@@ -26,6 +27,14 @@ from ..rendering.animation import AnimValue, Tween
 from ..rendering.pixel import beveled_panel
 from ..rendering.pool import acquired
 from .widget import Widget
+
+
+# Maps Button ``kind`` → semantic click cue id.
+_BUTTON_CUE_BY_KIND: dict[str, str] = {
+    "primary": "ui.click",
+    "secondary": "ui.click_soft",
+    "ghost": "ui.click_soft",
+}
 
 if TYPE_CHECKING:
     from ..assets.loader import AssetLoader
@@ -75,6 +84,7 @@ class Button(Widget):
         self._disabled_anim.to(0.0 if self.enabled else 1.0)
         self._disabled_anim.update(dt)
         if self.enabled and self.clicked(mouse_released):
+            SFX.play(_BUTTON_CUE_BY_KIND.get(self.kind, "ui.click"))
             self.on_click()
 
     def render(self, surface: pygame.Surface, assets: AssetLoader) -> None:
@@ -169,6 +179,7 @@ class Toggle(Widget):
         self._value = v
         self._knob.to(1.0 if v else 0.0)
         if notify:
+            SFX.play("ui.toggle_on" if v else "ui.toggle_off")
             self.on_change(v)
 
     def update(
@@ -266,6 +277,7 @@ class Stepper(Widget, Generic[T]):
         self._index = i
         self._flash = Tween(start=1.0, end=0.0, duration=THEME.anim.fast, ease=THEME.anim.ease_out)
         if notify:
+            SFX.play("ui.stepper")
             self.on_change(i, self.value)
 
     def set_values(self, values: Sequence[T], index: int | None = None) -> None:
@@ -391,6 +403,9 @@ class Slider(Widget):
         self._value = v
         self._thumb_anim.to(self._fraction(v))
         if notify:
+            # Throttled in the SFX catalogue so continuous drags
+            # produce a rhythmic tick rather than a solid tone.
+            SFX.play("ui.slider_tick")
             self.on_change(v)
 
     # -- helpers

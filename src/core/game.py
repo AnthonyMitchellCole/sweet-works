@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pygame
 
 from ..assets.loader import AssetLoader
+from ..audio.sfx import SFX
 from . import config
 from . import settings as settings_mod
 from .clock import Clock
@@ -21,6 +22,9 @@ if TYPE_CHECKING:
 
 class Game:
     def __init__(self) -> None:
+        # Mixer pre-init must land before pygame.init() to take effect with
+        # our low-latency buffer size.
+        SFX.prepare_mixer()
         pygame.init()
         pygame.display.set_caption(config.TITLE)
 
@@ -38,6 +42,10 @@ class Game:
         self.assets = AssetLoader()
         self.assets.prepare()
         self.assets.warm_fonts()
+
+        self.audio = SFX
+        self.audio.load()
+        self.audio.apply_settings(self.settings)
 
         self.clock = Clock()
         self.input = Input()

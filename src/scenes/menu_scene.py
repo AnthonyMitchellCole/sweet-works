@@ -9,6 +9,7 @@ from dataclasses import dataclass
 
 import pygame
 
+from ..audio.sfx import SFX
 from ..design.palette import PALETTE, lighten, with_alpha
 from ..design.theme import THEME
 from ..design.typography import TYPE
@@ -189,6 +190,7 @@ class MenuScene(Scene):
     def _move_selection(self, delta: int) -> None:
         n = len(self._items)
         self._selected = (self._selected + delta) % n
+        SFX.play("ui.hover")
 
     def _render_grid(self, surface: pygame.Surface) -> None:
         w, h = surface.get_size()
@@ -387,6 +389,7 @@ class MenuScene(Scene):
         if self.game is None or self._pending is not None:
             return
         item = self._items[self._selected]
+        SFX.play("ui.click")
 
         # Build the post-fade action, then start a short fade-out.
         if item.id == "benchmark":

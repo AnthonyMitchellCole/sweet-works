@@ -6,6 +6,7 @@ import math
 
 import pygame
 
+from ..audio.sfx import SFX
 from ..belts.belt import ConveyorBelt
 from ..belts.network_soa import BeltNetworkSoA
 from ..buildings.building import Building
@@ -135,6 +136,7 @@ class PlayScene(Scene):
             if event.key == pygame.K_ESCAPE:
                 from .menu_scene import MenuScene
 
+                SFX.play("ui.close")
                 self.game.replace_scene(MenuScene())
             elif event.key == pygame.K_r and self.cursor is not None:
                 self._rotate_at_cursor()
@@ -399,6 +401,7 @@ class PlayScene(Scene):
     def _on_tool_select(self, slot: ToolSlot) -> None:
         if self.cursor is not None:
             self.cursor.set_tool(slot)
+        SFX.play("world.tool_select")
 
     def _rotate_at_cursor(self) -> None:
         """Rotate an existing building under the cursor, otherwise the ghost."""
@@ -416,6 +419,7 @@ class PlayScene(Scene):
                 )
         else:
             self.cursor.rotate_cw()
+        SFX.play("world.rotate")
 
     def _mirror_at_cursor(self) -> None:
         """Toggle mirror on the hovered building, otherwise on the ghost."""
@@ -433,6 +437,7 @@ class PlayScene(Scene):
                 )
         else:
             self.cursor.mirror()
+        SFX.play("world.mirror")
 
     def _building_under_mouse(self) -> Building | None:
         if self.world is None or self.camera is None or self.game is None:
@@ -573,19 +578,33 @@ class PlayScene(Scene):
         if slot.id == "belt":
             if self.world.is_free(tile_pos):
                 belt = ConveyorBelt(tile_pos, self.cursor.rotation)
-                if self.world.place_tile(belt) and self.fx is not None:
-                    self.fx.spawn_place(
-                        tile_pos, (1, 1), self.world.time, PALETTE.primary
-                    )
+                if self.world.place_tile(belt):
+                    if self.fx is not None:
+                        self.fx.spawn_place(
+                            tile_pos, (1, 1), self.world.time, PALETTE.primary
+                        )
+                        self.fx.spawn_click_ripple(tile_pos, (1, 1), self.world.time, PALETTE.primary)
+                    SFX.play("world.place")
+                else:
+                    SFX.play("ui.error")
+            else:
+                SFX.play("ui.error")
             return
         prefab: BuildingPrefab | None = slot.prefab
         if prefab is None:
             return
         building = prefab.factory(tile_pos, self.cursor.rotation, self.cursor.mirrored)
-        if self.world.place_building(building) and self.fx is not None:
-            self.fx.spawn_place(
-                building.origin, building.footprint, self.world.time, PALETTE.secondary
-            )
+        if self.world.place_building(building):
+            if self.fx is not None:
+                self.fx.spawn_place(
+                    building.origin, building.footprint, self.world.time, PALETTE.secondary
+                )
+                self.fx.spawn_click_ripple(
+                    building.origin, building.footprint, self.world.time, PALETTE.secondary
+                )
+            SFX.play("world.place")
+        else:
+            SFX.play("ui.error")
 
     def _on_rmb(self, tile_pos: tuple[int, int]) -> None:
         """RMB: delete belt or building under cursor with a dissolve flourish."""
@@ -593,13 +612,19 @@ class PlayScene(Scene):
         # Peek first so we can spawn an FX with the right footprint/color.
         building = self.world.building_at(tile_pos)
         tile = self.world.tile_at(tile_pos)
-        if self.world.remove_at(tile_pos) and self.fx is not None:
-            if building is not None:
-                self.fx.spawn_remove(
-                    building.origin, building.footprint, self.world.time
-                )
-            elif isinstance(tile, ConveyorBelt):
-                self.fx.spawn_remove(tile.pos, (1, 1), self.world.time)
+        if self.world.remove_at(tile_pos):
+            if self.fx is not None:
+                if building is not None:
+                    self.fx.spawn_remove(
+                        building.origin, building.footprint, self.world.time
+                    )
+                    self.fx.spawn_click_ripple(
+                        building.origin, building.footprint, self.world.time, PALETTE.danger
+                    )
+                elif isinstance(tile, ConveyorBelt):
+                    self.fx.spawn_remove(tile.pos, (1, 1), self.world.time)
+                    self.fx.spawn_click_ripple(tile.pos, (1, 1), self.world.time, PALETTE.danger)
+            SFX.play("world.remove")
 
     def _render_hint(self, surface: pygame.Surface) -> None:
         assert self.game is not None

@@ -39,6 +39,7 @@ PLACE_DURATION: float = 0.32
 REMOVE_DURATION: float = 0.36
 ROTATE_DURATION: float = 0.30
 MIRROR_DURATION: float = 0.28
+RIPPLE_DURATION: float = 0.30
 
 
 @dataclass
@@ -47,7 +48,7 @@ class _Effect:
     footprint: tuple[int, int]
     color: Color
     started_at: float
-    kind: str  # "place" | "remove" | "rotate" | "mirror"
+    kind: str  # "place" | "remove" | "rotate" | "mirror" | "ripple"
     axis: Direction = Direction.E
     extra: dict = field(default_factory=dict)
 
@@ -99,6 +100,20 @@ class PlacementFx:
             _Effect(origin, footprint, color, time, "mirror", axis=axis)
         )
 
+    def spawn_click_ripple(
+        self,
+        origin: tuple[int, int],
+        footprint: tuple[int, int],
+        time: float,
+        color: Color = PALETTE.primary,
+    ) -> None:
+        """Visual twin of the ``world.place``/``world.remove`` cue.
+
+        Emits an expanding ring centred on the footprint that fades out
+        over :data:`RIPPLE_DURATION`, giving the sound a tactile beat.
+        """
+        self._fx.append(_Effect(origin, footprint, color, time, "ripple"))
+
     def clear(self) -> None:
         self._fx.clear()
 
@@ -122,6 +137,8 @@ class PlacementFx:
                 self._draw_rotate(surface, camera, fx, t)
             elif fx.kind == "mirror":
                 self._draw_mirror(surface, camera, fx, t)
+            elif fx.kind == "ripple":
+                self._draw_ripple(surface, camera, fx, t)
             alive.append(fx)
         self._fx = alive
 
@@ -325,12 +342,62 @@ class PlacementFx:
                 )
             surface.blit(overlay, (x - pad, y - pad))
 
+    def _draw_ripple(
+        self,
+        surface: pygame.Surface,
+        camera: "Camera",
+        fx: _Effect,
+        t: float,
+    ) -> None:
+        """Expanding radial ring centred on the footprint - the audio twin.
+
+        Starts at the footprint radius and grows outward with ``out_quart``,
+        tracing a thin primary ring plus a softer outer halo that fades with
+        the sound cue. Reuses the render surface pool so it allocates zero.
+        """
+        tile = config.TILE
+        zoom = camera.zoom
+        fw, fh = fx.footprint
+        cx_world = (fx.origin[0] + fw / 2.0) * tile
+        cy_world = (fx.origin[1] + fh / 2.0) * tile
+        cx, cy = camera.world_to_screen(cx_world, cy_world)
+
+        eased = easing.out_quart(t)
+        r_start = max(4.0, tile * 0.45 * max(fw, fh) * zoom)
+        r_end = r_start + max(14.0, tile * 0.95 * zoom)
+        radius = int(r_start + (r_end - r_start) * eased)
+        alpha = int(190 * (1.0 - t))
+        if radius <= 0 or alpha <= 4:
+            return
+
+        pad = radius + 4
+        total = pad * 2
+        with acquired((total, total)) as overlay:
+            pygame.draw.circle(
+                overlay,
+                with_alpha(fx.color, alpha),
+                (pad, pad),
+                radius,
+                2,
+            )
+            halo_alpha = max(0, alpha - 110)
+            if halo_alpha > 0:
+                pygame.draw.circle(
+                    overlay,
+                    with_alpha(fx.color, halo_alpha),
+                    (pad, pad),
+                    radius + 3,
+                    1,
+                )
+            surface.blit(overlay, (cx - pad, cy - pad))
+
 
 _DURATIONS: dict[str, float] = {
     "place": PLACE_DURATION,
     "remove": REMOVE_DURATION,
     "rotate": ROTATE_DURATION,
     "mirror": MIRROR_DURATION,
+    "ripple": RIPPLE_DURATION,
 }
 
 
@@ -380,4 +447,5 @@ __all__ = [
     "REMOVE_DURATION",
     "ROTATE_DURATION",
     "MIRROR_DURATION",
+    "RIPPLE_DURATION",
 ]

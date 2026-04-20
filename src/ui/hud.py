@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pygame
 
+from ..audio.sfx import SFX
 from ..core.events import EventBus
 from ..design.palette import PALETTE, lighten, with_alpha
 from ..design.theme import THEME
@@ -56,6 +57,9 @@ class HUD:
         if p is not None:
             p.value = 1.0
             p.to(0.0)
+        # Throttled inside the cue catalogue so a 1M-item benchmark stays
+        # whisper-quiet. ``audio_sim`` can also disable this entirely.
+        SFX.play("sim.produced")
 
     # -- update/render -----------------------------------------------------
 

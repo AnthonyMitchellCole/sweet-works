@@ -50,6 +50,14 @@ class UserSettings:
     camera_drag_inertia_decay: float = config.CAMERA_DRAG_INERTIA_DECAY
     default_zoom: float = config.DEFAULT_ZOOM
 
+    # Audio (0..1 volumes, booleans for the channel toggles).
+    audio_muted: bool = False
+    audio_master: float = 0.8
+    audio_sfx: float = 0.9
+    audio_ui: bool = True
+    audio_world: bool = True
+    audio_sim: bool = True
+
     def merged(self, **overrides: Any) -> UserSettings:
         return replace(self, **overrides)
 
@@ -128,6 +136,13 @@ def apply_to_config(s: UserSettings) -> None:
     config.CAMERA_SMOOTH = float(s.camera_smooth)
     config.CAMERA_DRAG_INERTIA_DECAY = float(s.camera_drag_inertia_decay)
     config.DEFAULT_ZOOM = float(s.default_zoom)
+
+    # Audio: the sound system carries its own live state; pushing the
+    # ``UserSettings`` into it is enough for the next ``play`` to respect
+    # new mute/volume/group flags.
+    from ..audio.sfx import SFX  # noqa: PLC0415 - local import avoids cycles
+
+    SFX.apply_settings(s)
 
 
 def apply(s: UserSettings, game: Game, *, force_display: bool = False) -> None:
