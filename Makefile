@@ -1,8 +1,8 @@
-# fac-py developer tasks. Works on POSIX + PowerShell via `make` (GNU).
+# Sweet Works developer tasks. Works on POSIX + PowerShell via `make` (GNU).
 
 PY ?= python
 
-.PHONY: help install run test bench perf lint format sprites
+.PHONY: help install run test bench perf lint format sprites icon
 
 help:
 	@echo "Targets:"
@@ -14,6 +14,7 @@ help:
 	@echo "  lint      Run ruff."
 	@echo "  format    Autoformat with ruff."
 	@echo "  sprites   Regenerate the procedural sprite cache (forces overwrite)."
+	@echo "  icon      Bake assets/branding/icon.png + icon.ico from menu_logo.png."
 
 install:
 	$(PY) -m pip install -r requirements.txt
@@ -38,3 +39,6 @@ format:
 
 sprites:
 	$(PY) -m src.assets.sprites --force
+
+icon:
+	$(PY) -m tools.make_icon

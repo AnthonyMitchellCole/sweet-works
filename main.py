@@ -1,4 +1,4 @@
-"""fac-py entry point."""
+"""Sweet Works entry point."""
 
 from __future__ import annotations
 

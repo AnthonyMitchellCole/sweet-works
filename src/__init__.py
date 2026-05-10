@@ -1,1 +1,1 @@
-"""fac-py: a top-down factory game scaffold."""
+"""Sweet Works: a top-down, pixel-art candy-factory game."""

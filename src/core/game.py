@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pygame
 
+from ..assets import paths
 from ..assets.loader import AssetLoader
 from ..audio.sfx import SFX
 from . import config
@@ -27,6 +28,7 @@ class Game:
         SFX.prepare_mixer()
         pygame.init()
         pygame.display.set_caption(config.TITLE)
+        self._apply_window_icon()
 
         # Load persisted user settings and fold them into ``config`` before
         # we construct anything that reads from it (Clock, AssetLoader caches
@@ -83,6 +85,24 @@ class Game:
         scene.enter(self)
 
     # -- window ------------------------------------------------------------
+
+    @staticmethod
+    def _apply_window_icon() -> None:
+        """Set the OS window/taskbar icon from ``assets/branding/icon.png``.
+
+        The PNG is baked from ``menu_logo.png`` by ``python -m tools.make_icon``
+        (also exposed as ``make icon``). Loading is best-effort: a missing
+        icon (e.g. fresh checkout that hasn't run ``make icon`` yet) is not
+        fatal -- the game just falls back to pygame's default icon.
+        """
+        icon_path = paths.ASSETS / "branding" / "icon.png"
+        if not icon_path.exists():
+            return
+        try:
+            icon = pygame.image.load(str(icon_path))
+        except pygame.error:
+            return
+        pygame.display.set_icon(icon)
 
     def _display_flags(self) -> int:
         flags = 0

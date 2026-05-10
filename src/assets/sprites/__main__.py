@@ -19,7 +19,7 @@ from . import generate_all, regenerate
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     p = argparse.ArgumentParser(
         prog="python -m src.assets.sprites",
-        description="Regenerate procedural sprites used by fac-py.",
+        description="Regenerate procedural sprites used by Sweet Works.",
     )
     p.add_argument(
         "--force",
