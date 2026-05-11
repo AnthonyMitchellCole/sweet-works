@@ -5,9 +5,9 @@
 <h1 align="center">Sweet Works</h1>
 
 <p align="center">
-  <em>Extract. Mix. Wrap.</em><br>
+  <em>VERY WORK-IN-PROGRESS</em><br>
   A top-down, pixel-art candy factory in Python &mdash; engineered for
-  <strong>1,000,000 items on belts at 20&nbsp;Hz</strong> on a developer laptop.
+  <strong>1,000,000 items on belts at 20&nbsp;Hz</strong>.
 </p>
 
 <p align="center">
